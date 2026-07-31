@@ -6,12 +6,28 @@ disagree, 05/06/07 win and are cited as such. Every claim traceable to research 
 inline as (doc NN, section). Every dependency on something validation could not confirm is
 marked **[UNVERIFIED]** and appears again in §11.
 
-The mandate (detox README, quoted in doc 02, "Maintainer's Stated Future Direction"):
+Upstream status, stated once and relied on throughout: **`dharple/detox` is archived.** Verified
+directly against the GitHub API for this document (`archived: true`, `open_issues_count: 0`, 446
+stars, last push 2026-07-12), matching doc 02 line 3 and `user_feedback_online.md`. Archived means
+permanently read-only: no new issues, no new PRs, no new releases, ever. The 34 issues closed in a
+single ~50-minute window on 2026-07-12 all carry one templated wind-down comment, so "closed" on
+those issues is an administrative sweep, **not** triage and **not** rejection: this document reads
+a closed issue as evidence of demand, never as evidence of a decision, unless the maintainer said
+something substantive on it (as on #124 and #130).
+
+The mandate (detox README, quoted in doc 02, "Maintainer's Stated Future Direction"; the closing
+lines are quoted here in full because the archival makes them operative rather than aspirational):
 
 > The days of weighty configuration files are behind us, and users looking for help with their
 > files shouldn't need to be well-versed in character encoding. detox needs to be easier to work
 > with, using command-line options and a config file that lets you pre-select those options. It
 > needs to just work. Period.
+>
+> ... So, `detox` is paused. I hope to pick it up again at some point and rebuild it from scratch,
+> in a different language, with a friendlier UI.
+
+(Second paragraph verified verbatim against the README in the pinned upstream clone `0a8e212`,
+lines 25-26.)
 
 Not a drop-in replacement. Same job: point it at a file or a tree, get sane unix-safe names,
 with room for custom patterns.
@@ -57,7 +73,10 @@ Evidence: the maintainer's rejection of PR #130 is the most technically substant
 the tracker (N-files-collapse risk, `readdir()` ordering, `S_ISREG`/`S_ISDIR`, BSD/macOS syscall
 differences, "I don't want to be responsible for destroying other people's data") and doc 05
 confirms it verbatim; #124 ties "just works" directly to "without completely destroying
-someone's files" (doc 02 theme 6, doc 05 rows #130/#124).
+someone's files" (doc 02 theme 6, doc 05 rows #130/#124). Fidelity note for anyone following that
+citation back: doc 05, Corrections Required item 4, flags that doc 02's longer #124 block quote is
+a synthesis of two maintainer comments 37 minutes apart. Only the short fragments quoted in this
+document are individually verbatim.
 _Falsifier: any `--overwrite`/`--force-replace` flag, any code path that can call a
 clobbering rename, any collision handled by `unwrap()`/silent skip._
 
@@ -85,8 +104,10 @@ _Falsifier: any `.to_str().unwrap()`, `to_string_lossy()` outside display/log co
 `String`-typed filename in a non-display signature._
 
 **P7. Every dependency costs distro packaging.** Debian requires each crate, including
-transitive ones, to be its own Debian source package built with no network (doc 04 §5,
-confirmed against the Debian Rust Team's own book; re-affirmed doc 07 row 8a). Validation also
+transitive ones, to be its own Debian source package built with no network (doc 04 §5, citing the
+Debian Rust Team's own book; doc 07 row 8a upholds that citation but explicitly did _not_ re-fetch
+it live, calling it "medium-high confidence, not re-verified live", which matches well-documented
+Debian practice and is not in real doubt). Validation also
 found several of doc 03's recommended crates stale: `unicode_skeleton` last released 2017
 (~9 years), `jwalk` Dec 2022, `figment` May 2024, `confusables` Aug 2023 (doc 06 rows 5c/5d,
 doc 07 row 7b).
@@ -131,6 +152,13 @@ $ detoxrs ~/Downloads
 Nothing was changed. Re-run with -x to apply.
 ```
 
+Two things in that output that are not defaults, said plainly so nobody has to guess. `Icon\r` is
+skipped because _this user's config_ lists it in `exclude` (§4.2). **There is no built-in default
+exclude list**: the only unconditional skips are `.git`/`.hg`/`.svn` (§5.6) and dotfiles during
+recursion. With no config at all, `Icon\r` would be renamed to `Icon` (the `\r` is delete-class).
+And `..bad  name...txt -> .bad_name.txt` depends on stage 9 collapsing runs of repeated `.`, which
+§3.2/§3.8 specify.
+
 Apply it.
 
 ```
@@ -163,9 +191,18 @@ Non-UTF-8 name repaired without the user thinking about encoding.
 ```
 $ detoxrs ./from-a-2004-cdrom
 ./from-a-2004-cdrom
-  Bj<f6>rk - Vespertine.mp3   ->  Bjork_-_Vespertine.mp3   (repaired: cp1252 -> UTF-8, then --ascii)
+  Bj<f6>rk - Vespertine.mp3   ->  Björk_-_Vespertine.mp3   (repaired: cp1252 -> UTF-8)
   Bj<f6>rk - Homogenic.mp3    ->  Björk_-_Homogenic.mp3    (repaired: cp1252 -> UTF-8)
+
+$ detoxrs --ascii ./from-a-2004-cdrom     # same names, transliteration opted into
+./from-a-2004-cdrom
+  Bj<f6>rk - Vespertine.mp3   ->  Bjork_-_Vespertine.mp3   (repaired: cp1252 -> UTF-8, then --ascii)
+  Bj<f6>rk - Homogenic.mp3    ->  Bjork_-_Homogenic.mp3    (repaired: cp1252 -> UTF-8, then --ascii)
 ```
+
+Repair happens by default; transliteration does not (§3.6), which is why the first invocation
+keeps `ö`. Note also that `_-_` survives untouched: that is stage 9's same-character rule (§3.8),
+not a rule the user had to write.
 
 (`<f6>` is how a byte that is not valid UTF-8 is rendered in the preview; it is never printed
 raw, because printing raw invalid bytes is how a terminal gets confused.)
@@ -211,6 +248,7 @@ Make filenames sane: unix-safe, portable, readable. Preview by default.
 
 USAGE
     detoxrs [OPTIONS] <PATH>...
+    detoxrs [OPTIONS] --stdin
     detoxrs apply <PLAN>
     detoxrs undo [--last | <BATCH-ID>] [--list]
 
@@ -228,12 +266,15 @@ MAIN
                              [unix (default) | windows | portable]
         --config <FILE>      Use only this config file
         --no-config          Ignore all config files; built-in defaults only
+        --stdin              Clean names read one per line from stdin; no filesystem access
 
 TRANSFORM  (every option here has an identically-named config key)
         --case <MODE>        keep (default) | lower | upper
         --separator <CHAR>   Replacement for spaces and unsafe punctuation [default: _]
         --spaces <MODE>      replace (default) | keep
         --normalize <FORM>   nfc (default) | nfd | none
+        --legacy-encoding <E>  Fallback for bytes that are NOT valid UTF-8, only
+                             [cp1252 (default) | latin1 | koi8-r | sjis | none]
         --url-decode         Decode %XX escapes [default: on; --no-url-decode to disable]
         --plus-to-space      Also treat '+' as an encoded space [default: off]
         --ascii              Transliterate non-ASCII to ASCII (lossy) [default: off]
@@ -257,6 +298,10 @@ OUTPUT
         --json               JSON on stdout, diagnostics on stderr
         --color <WHEN>       auto (default) | always | never   (respects NO_COLOR)
     -h, --help               Print help
+        --help-transforms    What each pipeline stage does, with examples
+        --print-config       Print the fully resolved policy (after config, profile,
+                             and flags) as TOML, and exit without walking anything
+        --explain-detox <F>  Read a detoxrc read-only and print the closest flag set
     -V, --version            Print version
 
 EXIT CODES
@@ -307,27 +352,32 @@ pub fn transform(d: &Decoded, p: &Policy) -> Outcome;   // pure, no I/O, no allo
 ```
 
 `transform` is a pure function of `(name, Policy)`. It never sees a path, a directory, a
-filesystem, or another file. Everything that involves other files (collisions, existence,
+filesystem, or another file. **The `Policy` reaching `transform` is always fully resolved**: in
+particular `max_len` is a concrete number, never the CLI's `0 = auto` sentinel. Resolving `auto`
+into a number is a walk-time concern (§3.10) that produces one resolved `Policy` per directory, and
+that is the only reason `transform`'s purity and stage 12's filesystem-derived limit can coexist.
+`Policy` therefore has two shapes in practice, and only the resolved one is what `transform`,
+the snapshot tests, and the §8.1 property tests ever see. Everything that involves other files (collisions, existence,
 length limits of _this_ filesystem) lives in the planner (§5). That split is what makes the
 property tests in §8 possible.
 
 ### 3.2 The default pipeline, in order
 
-| #   | Stage             | Default   | What it does                                                                                                                                                                                                                          |
-| --- | ----------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `decode`          | on        | `OsStr` -> text. Valid UTF-8 passes through untouched. Otherwise decode the raw bytes as CP1252 (superset of Latin-1 in the 0x80-0x9F range); if that yields no C1 controls and no replacement chars, emit `Repaired`. Else `Opaque`. |
-| 2   | `url_decode`      | on        | `%XX` -> byte, only when every escape in the name is well-formed and the decoded result is valid UTF-8 and contains no `/`, no NUL, and no controls. All-or-nothing per name. `+` -> space is **off**.                                |
-| 3   | `normalize`       | NFC       | Unicode normalization of the output name. Comparison inside the planner is _always_ NFC regardless of this setting.                                                                                                                   |
-| 4   | `invisible_strip` | on        | Delete bidi controls (U+202A-202E, U+2066-2069, U+200E/200F), zero-width (U+200B/200C/200D/2060/FEFF), Unicode Tags (U+E0000-E007F), and all remaining `Cf`, `Cc`, `Cs`, `Co`.                                                        |
-| 5   | `rules`           | none      | User's ordered `[[rule]]` list: literal or regex find/replace, applied in file order, each seeing the previous one's output. The only customization slot.                                                                             |
-| 6   | `ascii`           | **off**   | Transliterate to ASCII (`deunicode`). Lossy, opt-in.                                                                                                                                                                                  |
-| 7   | `safe_map`        | on        | Character classes, not a table: delete-class -> nothing; separator-class -> `--separator`; everything else kept. Sets defined in §3.7.                                                                                                |
-| 8   | `case`            | keep      | `lower`/`upper` use Unicode simple case mapping, not ASCII-only.                                                                                                                                                                      |
-| 9   | `collapse`        | on        | Collapse runs of the _same_ separator character to one. Do **not** merge runs of different separators. Drop separators adjacent to `.`.                                                                                               |
-| 10  | `trim`            | on        | Strip leading `-`; strip leading/trailing separators; strip trailing dots and spaces; preserve exactly one leading `.` if the original had one.                                                                                       |
-| 11  | `target`          | unix      | With `--target windows` or `portable`: reserved-stem check, Windows illegal-character check, MAX_PATH warning.                                                                                                                        |
-| 12  | `truncate`        | on (auto) | Grapheme-safe, extension-preserving truncation to the filesystem limit, or `--max-len N`.                                                                                                                                             |
-| 13  | `finalize`        | on        | Re-run 9/10/11 until fixed point (bounded to 3 iterations), then the non-empty guard: if the result is empty, `.`, or `..`, keep the original name and emit a note.                                                                   |
+| #   | Stage             | Default   | What it does                                                                                                                                                                                                                                                                        |
+| --- | ----------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `decode`          | on        | `OsStr` -> text. Valid UTF-8 passes through untouched. Otherwise decode the raw bytes as CP1252 (superset of Latin-1 in the 0x80-0x9F range); if that yields no C1 controls and no replacement chars, emit `Repaired`. Else `Opaque`.                                               |
+| 2   | `url_decode`      | on        | `%XX` -> byte, only when every escape in the name is well-formed and the decoded result is valid UTF-8 and contains no `/`, no NUL, and no controls. All-or-nothing per name. `+` -> space is **off**.                                                                              |
+| 3   | `normalize`       | NFC       | Unicode normalization of the output name. Comparison inside the planner is _always_ NFC regardless of this setting.                                                                                                                                                                 |
+| 4   | `invisible_strip` | on        | Delete bidi controls (U+202A-202E, U+2066-2069, U+200E/200F), zero-width (U+200B/200C/200D/2060/FEFF), Unicode Tags (U+E0000-E007F), and all remaining `Cf`, `Cc`, `Cs`, `Co`.                                                                                                      |
+| 5   | `rules`           | none      | User's ordered `[[rule]]` list: literal or regex find/replace, applied in file order, each seeing the previous one's output. The only customization slot.                                                                                                                           |
+| 6   | `ascii`           | **off**   | Transliterate to ASCII (`deunicode`). Lossy, opt-in.                                                                                                                                                                                                                                |
+| 7   | `safe_map`        | on        | Character classes, not a table: delete-class -> nothing; separator-class -> `--separator`; everything else kept. Sets defined in §3.7.                                                                                                                                              |
+| 8   | `case`            | keep      | `lower`/`upper` use Unicode simple case mapping, not ASCII-only.                                                                                                                                                                                                                    |
+| 9   | `collapse`        | on        | Collapse a run of the _same repeated character_ to one, for exactly this collapse set: `.`, `-`, `_`, and the configured `--separator`. Never merge runs of _different_ characters. Drop separators adjacent to `.`.                                                                |
+| 10  | `trim`            | on        | Strip leading `-`; strip leading/trailing separators (including one that immediately follows a preserved leading `.`); strip trailing dots and spaces; preserve exactly one leading `.` if the original had one.                                                                    |
+| 11  | `target`          | unix      | With `--target windows` or `portable`: reserved-stem check, Windows illegal-character check, MAX_PATH warning.                                                                                                                                                                      |
+| 12  | `truncate`        | on (auto) | Grapheme-safe, extension-preserving truncation to the filesystem limit, or `--max-len N`.                                                                                                                                                                                           |
+| 13  | `finalize`        | on        | Re-run 9/10/11 until fixed point (bounded to 3 iterations). Then: if the result is empty, `.`, or `..`, or if the loop did not converge, `transform` returns `Unrepresentable` and the planner **skips the entry unchanged** (§3.14). It does _not_ fall back to the original text. |
 
 ### 3.3 Why that order
 
@@ -354,7 +404,8 @@ property tests in §8 possible.
   truncating before that reintroduces overlong names.
 - **13 last** because truncation can itself create a trailing dot or a reserved stem
   (`report.tar.gz` truncated to `report.` ; `CONSOLE.txt` truncated to `CON.txt`). One bounded
-  fixed-point pass beats trying to predict the interaction.
+  fixed-point pass beats trying to predict the interaction. What happens when the bound is not
+  enough is specified, not left to the implementer: see §3.14.
 
 ### 3.4 Encoding repair without making the user think about encoding
 
@@ -421,9 +472,13 @@ Three classes, defined by rule, not by a shipped table. Doc 03 constraint 6 is t
 separates genuinely shell-dangerous characters from merely non-portable ones and warns that a
 single "safe" set over-mangles legitimate Unicode.
 
-**Delete class** (removed, no replacement): C0 controls including newline and tab, C1 controls,
-DEL, NUL, and the invisibles from stage 4. Deleted rather than substituted because a control
-character carries no information a human wanted and substituting it leaves visible litter.
+**Delete class** (removed, no replacement): control characters only, i.e. Unicode `Cc` (C0
+controls including newline and tab, C1 controls) plus DEL and NUL. Deleted rather than substituted
+because a control character carries no information a human wanted and substituting it leaves
+visible litter. The delete class deliberately does **not** include stage 4's invisibles (`Cf`,
+bidi, zero-width, Tags, `Cs`, `Co`): those are stage 4's business alone, and if the delete class
+duplicated them, `--no-invisible-strip` would be a dead flag and the Stage Independence property
+(§8.1) would be false. Controls are the one thing no flag can keep.
 
 **Separator class** (each run becomes one `--separator`, default `_`): ASCII space, and the
 shell-metacharacter and path set: `" ' ` $ ! * ? [ ] < > | ; & : \ / ( )`.
@@ -454,8 +509,15 @@ for in #7: the request the upstream maintainer himself called well-aligned with 
 
 ### 3.8 Whitespace and separator collapsing
 
-Collapse runs of the _same_ separator character only. `a__b` -> `a_b`. `a--b` -> `a-b`.
-`a_-_b` -> `a_-_b`, **unchanged**. detox collapses mixed runs by positional precedence in a
+Collapse a run of the _same repeated character_ only, and only for characters in the collapse set:
+`.`, `-`, `_`, and the configured `--separator` (which is `_` by default, so by default the set is
+three characters). Stating the set matters, because `-` and `.` are Keep-class (§3.7) and would
+otherwise be untouchable: Keep-class means "not deleted and not substituted", not "exempt from
+collapsing". `a__b` -> `a_b`. `a--b` -> `a-b`. `a...b` -> `a.b`. `a_-_b` -> `a_-_b`,
+**unchanged**, because no run here is longer than one character. Nothing outside the collapse set
+collapses, so `aaa` stays `aaa`; but a run produced _by_ stage 7 is a run of the separator and does
+collapse, which is the whole point (`" & " -> "___" -> "_"`).
+detox collapses mixed runs by positional precedence in a
 hardcoded search string (`.` beats `-` beats `_`, an artifact of `strchr`, confirmed in source
 by both doc 01 §2.3/§8.7 and doc 05), and that behavior is precisely what #121 filed a bug
 about: the `_-_` convention in music filenames being destroyed. Same-character-only collapsing
@@ -467,6 +529,12 @@ shell-danger). Strip trailing dots and spaces always, on every platform, because
 Windows shell do not agree with POSIX about whether they exist (doc 03 constraint 4; doc 06 row
 7c refines the mechanism to a shell/UI-layer inconsistency rather than a hard filesystem strip,
 which does not change the decision). Preserve exactly one leading `.` so dotfiles stay dotfiles.
+
+"Leading" means leading _after_ the preserved dot, and that needs a worked example because two
+implementations would otherwise differ. `.!file.txt`: stage 7 turns `!` into `_`, giving `._file.txt`;
+stage 10 preserves the one leading `.` and then strips the separator that immediately follows it,
+giving `.file.txt`. Not `._file.txt`. The dot is preserved as a dotfile marker, not as a character
+that shields whatever comes after it.
 
 ### 3.9 Case handling
 
@@ -500,16 +568,25 @@ this), which is why it is a runtime constant, not a compile-time assumption.
 Algorithm:
 
 1. Split extension. Treat as an extension the last `.`-suffix and, if the segment before it is
-   <= 4 characters and itself preceded by a `.`, the pair (`.tar.gz`). This deliberately
+   <= 4 **bytes of UTF-8** and itself preceded by a `.`, the pair (`.tar.gz`). This deliberately
    reproduces detox's behavior, including the 5-character lookback (doc 01 §2.3, §8 item 8;
    confirmed against source in doc 05), because it is well-understood and the failure mode is
-   benign.
+   benign. The unit is stated because everything else in this section is careful about
+   bytes-vs-codepoints-vs-UTF-16-units and this comparison must not be the one place a reader
+   guesses. Bytes, specifically, and verified against primary source rather than inferred:
+   `src/clean_string.c:284-294` in the pinned clone `0a8e212` does `while (--input_walk > filename)
+{ if (extension - input_walk > 5) break; ... }` on a `char *`, i.e. pointer arithmetic over
+   bytes. For the ASCII inner segments this rule exists to catch (`.tar`, `.tar.gz`, `.tar.bz2`)
+   bytes and codepoints agree, so the choice only shows up on inputs the rule was never aimed at.
 2. Truncate the stem on a **grapheme cluster** boundary via `unicode-segmentation`, not a
    codepoint boundary. `sanitize-filename` 0.6.0 truncates at `is_char_boundary`, i.e. it will
    split a base+combining-mark pair or a ZWJ emoji sequence (doc 06 row 5a, read from source:
    worse than doc 03 implied). That is why we do not use it.
 3. If the extension alone does not fit, truncate the whole name as one unit rather than detox's
-   "print a warning and give up unchanged" (doc 01 §2.3).
+   "print a warning and give up unchanged" (doc 01 §2.3). Same grapheme-cluster boundary algorithm
+   as step 2, just with no extension split: the "No grapheme splitting" property (§8.1) is not
+   waived on the fallback path, which is exactly where an implementer would be tempted to reach for
+   `is_char_boundary`.
 4. If truncation makes the name collide, append a disambiguator (see §5.3). Truncation alone
    generates collisions among similarly-prefixed files; Samba's mangling scheme hashes precisely
    to avoid unrelated files merging (doc 03, "Samba mangled names").
@@ -561,6 +638,48 @@ cheap subset: a warning when a single name mixes scripts in a way UTS #39 calls 
 | Grapheme-safe length truncation            | Full-width folding (v1.1)              |
 | Collision detection + renumbering          | Confusable-pair warnings (v1.1)        |
 | Undo journal                               | `--edit` (v1.1)                        |
+
+### 3.14 When there is no representable output: `Unrepresentable`
+
+This subsection exists because the earlier draft had a real contradiction, and the resolution is a
+design decision, not a wording fix. Stage 13's original rule ("if the result is empty, `.`, or
+`..`, keep the original name") reintroduces exactly the characters the pipeline exists to remove.
+Worked counterexample: `***`. All three characters are separator-class, so stage 7 gives `___`,
+stage 9 collapses to `_`, stage 10 strips the lone leading/trailing separator, and the result is
+empty; falling back to `***` yields an output containing three separator-class characters. That
+falsifies the **Safety closure** property in §8.1, which is a non-negotiable release gate. A
+release gate that the specified default pipeline violates on a three-character input is not a
+gate.
+
+The resolution: `transform` has a third outcome. It either produces a name that satisfies safety
+closure, or it produces **`Unrepresentable(reason)`** and no name at all.
+
+```rust
+pub enum TransformResult { Name(Outcome), Unrepresentable(Unrepresentable) }
+pub enum Unrepresentable { ReducesToEmpty, ReducesToDotOrDotDot, NotConverged }
+```
+
+- The planner turns `Unrepresentable` into `Resolution::Skipped`, reported like an `Opaque` name
+  (§3.4) and counted in the `skipped` tally, with the entry left **exactly** as it is on disk:
+
+  ```
+    ***   -   skipped (nothing safe remains after cleaning; use --keep, a [[rule]], or rename it yourself)
+  ```
+
+- `NotConverged` (the stage-13 loop still moving after 3 iterations) takes the same path. That is
+  the whole answer to "what happens when the bound is not enough": no silent non-idempotent
+  output, no runtime-raised bound, no panic. A `NotConverged` occurrence is also a bug report
+  against us, so it is logged at `-v` with the intermediate states.
+- Skipping rather than substituting a placeholder is P3 and P4 in combination: we never destroy
+  data, and inventing a name (`_`, `file`, a hash stub) is a taste-driven guess that would also
+  collide with every other unrepresentable name in the directory. Doing nothing is the honest
+  outcome, and `--strip`/`[[rule]]`/`--keep` give the user a way to say what they wanted.
+
+Consequences elsewhere, all of them now stated: §8.1's Safety closure and Non-empty properties are
+quantified over `Name(_)` results only, and a new property covers the other branch (`transform`
+returns either a safety-closed name or `Unrepresentable`, never an unsafe name). §11 question 11
+records the one thing this does _not_ settle: whether real trees contain enough all-punctuation
+names that a placeholder policy would earn its keep.
 
 ---
 
@@ -658,6 +777,14 @@ Within the chosen file: built-in defaults < top-level keys < `[profile.NAME]` (o
 < CLI flags. Environment variables set no transform options; only `DETOXRS_CONFIG`, `NO_COLOR`,
 and friends are read.
 
+Because that stack is four layers deep, there is one command that answers "which of these set this
+value": `detoxrs --print-config` dumps the fully resolved policy as TOML and exits. This is the one
+capability detox's `-L -v` had (list sequences / dump the active config, doc 10) that P1's fixed
+pipeline does not make redundant — it makes it _more_ useful, since a user combining `--config`, `-p`,
+and flags has more ways to be surprised than a user picking one sequence. It is read-only, walks
+nothing, and its output is the same shape as a config file, so it doubles as "write my current
+invocation down."
+
 First-match-wins over cascading is the ruff/Prettier model (doc 04 §2; doc 07 row 3 confirms
 doc 04 got the ruff `extend` nuance right, and row 3b confirms Prettier's nearest-file-fully-
 governs behavior). detox merges a system file, `$HOME/.detoxrc`, and the XDG file with same-named
@@ -677,7 +804,8 @@ a user's files should not have its defaults changed by a package.
 | Overwrite-on-collision                          | P3, and the maintainer's #130 rejection. Not a default to change, an absent capability.                                                                           |
 | Whether truncation is grapheme-safe             | Correctness, not preference.                                                                                                                                      |
 | Journal format                                  | Undo has to be readable by a future version.                                                                                                                      |
-| Whether recursion follows symlinked directories | §5.6. There is no flag. Issue #23 is a real user incident.                                                                                                        |
+| Whether recursion follows symlinked directories | §5.6. There is no flag. Issue #23 documents the blast radius (upstream fixed its own instance in 2.0.0-beta1; the hazard is inherent to the operation).           |
+| VCS-metadata skip (`.git`/`.hg`/`.svn`)         | §5.6. Never configurable, not even with `--hidden`. Renaming inside `.git` corrupts a repository; #110's `--git` rejection says this tool has no business there.  |
 | `[profile.*]` inheritance / `extend`            | One level of indirection is enough; ruff added `extend` under pressure and it is the part of its config model people misread.                                     |
 
 ---
@@ -724,6 +852,12 @@ scope decision with an outsized safety payoff: `EXDEV` (doc 03 constraint 11a) b
 structurally impossible, so there is no copy+unlink fallback, no non-atomic path, and no
 "lost hardlink identity" case to reason about. If you want to move files, use `mv`.
 
+Because only the directory entry changes, everything attached to the inode is untouched by
+construction: extended attributes (including macOS resource forks and Finder metadata), ACLs,
+SELinux contexts, owner, group, mode, and the inode number itself all survive a `detoxrs` rename
+unchanged. That is a `rename(2)`-level guarantee, not something we implement, and it is stated here
+so a reader auditing the safety story does not have to derive it from POSIX.
+
 ### 5.3 Collisions
 
 Three layers, in order:
@@ -748,6 +882,44 @@ Policies, `--on-collision`:
 - `skip`: leave the conflicting entries alone, report them, exit 1.
 - `fail`: refuse the entire batch before renaming anything.
 
+**Renumbering terminates, and the bound is stated rather than assumed.** Further truncation can
+itself collide with a third, unrelated entry, which needs another candidate; and at a small enough
+limit (`--max-len 2`) no numbered name fits at all. So the search is bounded exactly like stage 13
+is: for a given source, try N = 2..999, each candidate truncated as needed to fit the limit, against
+the set of names already taken in that directory (existing entries plus destinations already
+allocated in this plan). The first candidate that fits and is free wins. If none does, the item is
+an **unresolvable conflict**: it becomes `Conflict` and is routed by `--on-collision` exactly as if
+the user had asked for that policy, i.e. reported and left alone under `number`/`skip`, and fatal
+to the batch under `fail`. We never guess a name, never drop the numbering to fit, and never exceed
+the limit. 999 is a stated ceiling, not a computed one: a directory with a thousand names colliding
+on one destination is a case where the honest output is a report, not a rename.
+
+**Rename cycles and sibling swaps: structurally impossible, and here is the proof rather than the
+assurance.** A reviewer asked for cycle detection, a temp-name dance, and topological ordering of
+sibling renames, on the grounds that deepest-first ordering (§5.1) only protects parents against
+children and says nothing about siblings. The observation is right; the remedy is unnecessary, and
+building it would add the one thing §5.4 works hardest to avoid — a rename to a name the user never
+asked for.
+
+`transform` is a pure function of `(name, Policy)` (§3.1) and one resolved `Policy` governs the whole
+directory (§3.10). Suppose a two-item swap: `f(a) = b` and `f(b) = a`. Idempotence (§8.1, a
+non-negotiable release gate) requires `f(f(a)) = f(a)`, i.e. `f(b) = b`, so `a = b`. Contradiction.
+The same argument kills chains: `f(a) = b` and `f(b) = c` forces `f(b) = b`, i.e. `c = b`, which means
+the second entry was never a `Rename` at all — it is `Unchanged`, because it is already a fixed point.
+Renumbering cannot manufacture one either, since it only ever allocates a name that is free of both
+existing entries and already-allocated destinations.
+
+So the only way one entry's destination equals another entry's current name is the case layers 1 and
+2 already handle: the other entry is `Unchanged`, and this is an ordinary pre-existing-destination
+conflict, renumbered or refused per `--on-collision`. There is no ordering problem to solve.
+
+What we do add is the assertion, because a proof that rests on Idempotence should fail loudly if
+Idempotence ever breaks: at plan time, if any `Rename` item's destination equals the `from` of another
+item that is _also_ a `Rename` in the same directory, that is an internal-consistency bug, and the
+planner refuses the entire batch with an internal error rather than renaming anything. Cheaper than a
+cycle breaker, and it catches the real failure (a stage that is not idempotent) instead of papering
+over it.
+
 There is **no** `overwrite`. Not off-by-default, absent. Doc 02 theme 6 records two independent
 asks (#122, #130) and a considered rejection; #124 ties "just works" directly to not destroying
 files. Renumbering is what "just works" means here: detox's refuse-and-report is why users asked
@@ -769,7 +941,11 @@ and shown, per-item renames are individually atomic, and the journal makes the b
 pub trait RenameOps {
     /// Fails with AlreadyExists rather than clobbering. Never falls back to a clobbering call.
     fn rename_noreplace(&self, dir: &Path, from: &OsStr, to: &OsStr) -> Result<(), RenameErr>;
-    /// Same source inode, different spelling of the same name. Plain rename(2) is correct here.
+    /// Same source inode, different spelling of the same name: a case change (§5.4) OR a
+    /// normalization change such as NFD -> NFC (§6.2). Both route here, which is why the
+    /// no-clobber flag must NOT be used: the destination "exists" and is the same inode.
+    /// Plain rename(2) is correct here. The name says "case_only" for historical reasons;
+    /// read it as "same inode, respelled".
     fn rename_case_only(&self, dir: &Path, from: &OsStr, to: &OsStr) -> Result<(), RenameErr>;
 }
 ```
@@ -844,11 +1020,27 @@ since moved to another directory.
 - We always `lstat`/`symlink_metadata`, never `stat`. A symlink's own name is what gets cleaned;
   the target is never touched, never followed, never resolved.
 - **Recursion never descends into a symlinked directory, and there is no flag to make it.**
-  Doc 05 correction #2 is emphatic here and overturns doc 02's dismissal of symlink handling as
-  a weak theme: issue **#23** is a first-person incident report where `detox -r --special`
-  followed a relative symlink pointing at `../..` and recursed across the reporter's entire
-  projects directory, and **#20** flags symlink loops and `.`/`..` symlinks as an untested gap.
-  Unbounded blast radius from a single symlink is not a feature that earns a flag.
+  The evidence here needs stating precisely, because the obvious citation is stale. Issue **#23**
+  is a first-person incident report where `detox -r --special` followed a relative symlink pointing
+  at `../..` and recursed across the reporter's entire projects directory (doc 05 correction #2,
+  which rightly overturns doc 02's dismissal of symlinks as a weak theme). But **upstream fixed
+  that bug in 2.0.0-beta1 (2021-03-05)** — verified directly in the pinned clone `0a8e212`:
+  `CHANGELOG.md` line 144, Security section, "Symlinks that point at directories are no longer
+  followed when `--special` and `-r` are specified together. [#23]", and structurally confirmed at
+  `src/file.c:218-223`, where `lstat` plus `S_ISDIR` means a symlink is never classified as a
+  directory and `parse_dir` never descends through one (doc 10, `--special`; doc 13 §4.3). So #23
+  is **not** a live flaw in detox v3.0.1 and this document does not claim it is.
+  What #23 is still good for is the only thing we need it for: a documented, first-person account of
+  the blast radius when a renamer does follow a directory symlink — one relative symlink turning a
+  scoped run into a whole-home-directory run. That is evidence about the _hazard_, and the hazard is
+  a property of the operation, not of detox's 2021 code. **#20** (symlink loops and `.`/`..`
+  symlinks flagged as an untested gap) is unchanged by the #23 fix and remains open evidence that
+  nobody has characterized the edge cases.
+  The decision therefore rests on its own merits, not on upstream's bug: unbounded blast radius from
+  a single symlink is not a feature that earns a flag, and following one buys the user nothing they
+  cannot get by naming the target directly. We reach the same place upstream did, by construction
+  rather than by patch — the difference being that in `detoxrs` there is no `--special` to combine it
+  with and no flag to turn it back on.
 - **No `--special`.** detox silently skips symlinks, FIFOs, sockets, and device nodes unless
   `--special` is passed: including ones named explicitly on the command line, which doc 01 §8
   item 3 calls "a very easy trap" and doc 05 re-confirmed (only `Scanning:` is printed, no error).
@@ -879,6 +1071,46 @@ Terraform's saved-plan model (doc 04 §1): and doc 07 row 6 is the reason we des
 Why bother when preview-then-`-x` already exists: a preview and a subsequent `-x` recompute the
 plan and can differ if the tree changed in between. `apply` cannot. For a 200k-file media
 library, that difference matters.
+
+### 5.8 Interrupts, I/O failure, and concurrent runs
+
+§5.5's crash story is only as good as its answer for the ways a run actually gets cut short, so
+those answers are here rather than left inferable.
+
+- **SIGINT/SIGTERM.** We install a handler that sets a flag; the apply loop checks it between items
+  and stops cleanly, writing the summary and the journal's closing state. A rename already in flight
+  is not interrupted — `rename(2)` is a single syscall and either happened or did not. Ctrl-C
+  therefore leaves a prefix of the plan applied and fully recorded, and `detoxrs undo --last` reverts
+  exactly that prefix. An abrupt `SIGKILL` is also safe, but only via the `intent`/fsync/rename/`done`
+  protocol: it can leave one item whose outcome is unknown, which replay reports as such rather than
+  guessing. The handler exists to turn the common interrupt into the clean case, not because the
+  abrupt case is unsafe.
+- **I/O failure taxonomy.** The one hand-written error enum (§7.2) distinguishes at least
+  `AlreadyExists`, `PermissionDenied` (`EACCES`/`EPERM`), `ReadOnlyFilesystem` (`EROFS`),
+  `NoSpace` (`ENOSPC`/`EDQUOT`), `NameTooLong` (`ENAMETOOLONG`, which after §3.10 means our detected
+  limit was wrong and is worth a loud report), `NotFound` (raced away since the walk), and
+  `Unsupported` (the flag demotion in §5.4). Every one is a per-item error line naming the errno and
+  the path, best-effort continuation, exit 1 at the end (§2.4). `EROFS` and `ENOSPC` are the two that
+  will fail every remaining item, so the first occurrence of either aborts the rest of the batch with
+  one message instead of printing 200k identical lines.
+- **The journal is itself I/O and can itself fail.** If the `intent` record cannot be written or
+  fsynced, the rename does **not** happen: an unjournaled rename is worse than a skipped one, because
+  it is the one thing `undo` cannot reverse. A journal write failure therefore aborts the batch
+  immediately, before the rename it was describing. `--no-journal` is the supported way to rename
+  without that dependency, and it says so loudly.
+- **Walk errors.** An unreadable directory during recursion is non-fatal: it is reported and skipped,
+  and the walk continues, matching detox (doc 13 §4.4). `EMFILE`/`ENFILE` aborts the run before any
+  rename, exit 1 — detox hard-exits here too, and continuing with an exhausted descriptor table
+  produces a silently incomplete snapshot, which is the one thing the two-phase design in §5.1 cannot
+  tolerate.
+- **Concurrent invocations are an explicit non-goal, not a guarded case.** Two `detoxrs -x` runs over
+  overlapping trees are not serialized: there is no lock file. What bounds the damage is already in
+  the design — no-clobber renames mean neither run can destroy the other's file, `apply`'s
+  `(dev, ino, mtime)` recheck means a saved plan refuses to run against a tree the other run moved,
+  and each batch gets its own journal file, so neither undo history is corrupted. What you can get is
+  a confusing report and a partially-cleaned tree, which a second run fixes. A lock is deliberately
+  not added: it would need to be advisory, on a path we do not own, with a stale-lock story, to
+  prevent an outcome that is already non-destructive.
 
 ---
 
@@ -990,6 +1222,7 @@ detoxrs/
         percent.rs               # safe all-or-nothing %XX decode (ours, ~50 lines)
         classes.rs               # delete/separator/keep classification (ours)
         invisible.rs             # generated from UCD; build-time script, data checked in
+        scripts.rs               # UCD Script property, same generator; for §3.12's mixed-script warning
         rules.rs                 # [[rule]] application, literal + regex
         pipeline.rs              # the 13 stages, in order, and only here
         truncate.rs              # grapheme-safe, extension-aware, limit-aware
@@ -1016,15 +1249,28 @@ detoxrs/
 
 ### 7.2 Dependency budget
 
-Target: **<= 10 direct dependencies, <= 45 crates in `cargo tree` for a default build.**
-Enforced by a CI check that fails on regression. The reason is not aesthetics: Debian requires
-every transitive crate to become its own Debian source package, built with no network (doc 04 §5,
-confirmed; doc 07 row 8a). Dependency count is the packaging cost.
+Target: **<= 11 direct dependencies** for a default build, enforced by a CI check that fails on
+regression. The reason is not aesthetics: Debian requires every transitive crate to become its own
+Debian source package, built with no network (doc 04 §5; doc 07 row 8a). Dependency count is the
+packaging cost.
+
+Eleven, counted honestly, because the table below names eleven distinct crates: `serde` and `toml`
+are one row but two packages, and `terminal_size` is a maybe. An earlier draft said "<= 10" while
+listing eleven, which is the kind of budget a CI check turns into a lie on day one. If
+`terminal_size` proves unnecessary (see its row), the real number is ten and the cap comes down with
+it.
+
+There is deliberately **no total-transitive-crate cap in this document.** A draft target of "<= 45
+crates in `cargo tree`" was struck because nobody has run `cargo tree` against this exact set:
+`clap`'s derive feature alone pulls the `syn`/`quote`/`proc-macro2` chain plus its own ecosystem, and
+a number asserted without measuring is not a budget. **[UNVERIFIED]**: the transitive count for the
+set below. The first `cargo add` commit measures it and writes the real ceiling into CI; until then
+the direct-dependency cap is the only enforced number.
 
 | Direct dep                                                                 | Why not our own code                                                                                                                                                                                                                 |
 | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `clap` (derive)                                                            | 4.6.5, 2026-07-31 (doc 07 row 7a). Arg parsing plus help plus completions plus man is not worth hand-rolling.                                                                                                                        |
-| `serde` + `toml`                                                           | Config.                                                                                                                                                                                                                              |
+| `serde` + `toml` (two crates, two budget lines)                            | Config.                                                                                                                                                                                                                              |
 | `serde_json`                                                               | `--json`, plan files, journal.                                                                                                                                                                                                       |
 | `unicode-normalization`                                                    | 0.1.25, 2025-10-30 (doc 06 row 5b). UAX #15 is not hand-rollable.                                                                                                                                                                    |
 | `unicode-segmentation`                                                     | 1.13.3, 2026-06-01 (doc 06 row 5b). Grapheme clusters, mandatory for truncation.                                                                                                                                                     |
@@ -1032,7 +1278,7 @@ confirmed; doc 07 row 8a). Dependency count is the packaging cost.
 | `walkdir`                                                                  | Recursive walk.                                                                                                                                                                                                                      |
 | `libc`                                                                     | `renameat2`, `renamex_np`, `getattrlist`, `statfs`.                                                                                                                                                                                  |
 | `deunicode` (feature `ascii`, default on)                                  | 1.6.2, 2025-04-27 (doc 06 row 5b). Transliteration tables.                                                                                                                                                                           |
-| `terminal_size` or equivalent, only if needed for preview column alignment | Candidate for deletion; a fixed two-column layout may not need it.                                                                                                                                                                   |
+| `terminal_size` or equivalent, only if needed for preview column alignment | Candidate for deletion, and the 11th budget line until deleted; a fixed two-column layout may not need it. Resolve before the first release, not after.                                                                              |
 
 Dev-only: `insta`, `trycmd`, `assert_cmd`, `proptest`, `criterion`, `clap_complete`,
 `clap_mangen`. All confirmed active (doc 07 row 7a).
@@ -1057,12 +1303,23 @@ Dev-only: `insta`, `trycmd`, `assert_cmd`, `proptest`, `criterion`, `clap_comple
 
 ### 7.3 What we implement ourselves, deliberately
 
-CP1252/Latin-1 decode tables; percent-decoding; the character classifier; the invisible/bidi
-table (generated from UCD at build time from data files in-tree, never fetched); grapheme-safe
-extension-aware truncation; the Windows reserved-name check; config discovery and three-source
-merge; the collision engine; the journal; the rename FFI shims. Total estimate: 1200-1800 lines
-of non-test Rust. All of it is either logic we must be able to test exhaustively (P7's real
+CP1252/Latin-1 decode tables; percent-decoding; the character classifier; the invisible/bidi and
+UCD Script tables (generated at build time from data files in-tree, never fetched); grapheme-safe
+extension-aware truncation; the Windows reserved-name check; config discovery and first-match
+selection; the collision engine including chain ordering and cycle refusal (§5.3); the journal; the
+rename FFI shims. All of it is either logic we must be able to test exhaustively (P7's real
 motivation) or a stale-crate replacement validation told us to avoid.
+
+Size estimate, split so it is checkable rather than reassuring. **v0.1 (§10): 1200-1800 lines of
+non-test Rust**, which is where the earlier single figure came from. **v1.0 including config,
+profiles, rules, `--target`, per-directory limit detection, `--stdin`, plan files, and the two
+generated tables: 2200-3000 lines.** The parts that historically blow such estimates are named
+rather than averaged away: the crash-safe journal with reverse replay and the three-layer collision
+engine with deterministic renumbering, chain ordering, and cycle detection each run 300-500 lines on
+their own, and `report.rs` (human preview plus `--json` plus verbosity plus color) is another 250-400.
+The already-itemized small pieces (`decode.rs` ~40, `percent.rs` ~50, `config.rs` ~150, the macOS FFI
+shim ~60 plus a capability probe) are a rounding error against those. Treat the range as a budget to
+be checked at v0.1, not as a prediction.
 
 ---
 
@@ -1075,26 +1332,37 @@ Non-negotiable means: missing or failing blocks a release.
 `transform` is pure, so all of these are cheap and hold over arbitrary input strings including
 astral planes, combining marks, bidi controls, and long runs.
 
-| Property                            | Statement                                                                                                                                                                                                                                                                                 |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Idempotence**                     | `transform(transform(x)) == transform(x)` for every policy. The stage-13 fixed-point loop exists to make this true; if it does not hold, the loop bound is wrong.                                                                                                                         |
-| **Safety closure**                  | `transform(x)` contains no delete-class character, no separator-class character, no leading `-`, no trailing dot or space, and (unless `--case keep`) is entirely in the requested case.                                                                                                  |
-| **Length bound**                    | `transform(x)` satisfies both the byte and UTF-16-unit limit for the target policy, for every input, including inputs made of astral emoji only.                                                                                                                                          |
-| **No grapheme splitting**           | The grapheme cluster count of `transform(x)` is not greater than that of `x`, and every cluster in the output is a complete cluster from the input or a replacement character we chose.                                                                                                   |
-| **Non-empty**                       | `transform(x)` is never `""`, `"."`, or `".."`.                                                                                                                                                                                                                                           |
-| **Dotfile preservation**            | `x` starts with exactly one `.` implies `transform(x)` starts with exactly one `.`, and vice versa.                                                                                                                                                                                       |
-| **Valid UTF-8 is never re-decoded** | For every valid-UTF-8 `x`, the `Decoded` variant is `Utf8` and the `Repaired` path is never entered. This is P2 as an executable assertion, and it is the regression test for detox's `café.txt -> cafÃ©.txt` (doc 01 §7, doc 05).                                                        |
-| **Stage independence**              | Disabling stage N changes only what stage N is documented to change: the output with stage N off equals the output of the pipeline with stage N replaced by identity. Catches the scope-creep bug detox had, where the UTF-8 filter also did safe-filter work (#40, #86, doc 02 theme 2). |
+Two scoping rules apply to the whole table and are not negotiable, because without them two of the
+properties are false on three-character inputs (§3.14). First, every property whose subject is "the
+output name" is quantified over the `Name(_)` branch of `TransformResult` only; the
+`Unrepresentable` branch produces no name and so cannot violate a property about names. It is
+covered instead by **Totality** below, which is what stops that scoping from being a loophole.
+Second, every property is quantified over **resolved** policies (`max_len` a concrete number, never
+the CLI's `0 = auto` sentinel: §3.1), because a `proptest` harness has no directory to probe.
+
+| Property                            | Statement                                                                                                                                                                                                                                                                                           |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Totality**                        | For every input and every resolved policy, `transform` returns either `Name(o)` where `o` satisfies Safety closure and Non-empty, or `Unrepresentable(r)`. It never returns an unsafe name and never panics. This is the property that makes the `Name(_)` scoping above honest rather than a hole. |
+| **Idempotence**                     | For `Name(o)`, `transform(o) == Name(o)` for every resolved policy. The stage-13 fixed-point loop exists to make this true; non-convergence within the bound is `Unrepresentable(NotConverged)` (§3.14), not a silently non-idempotent output.                                                      |
+| **Safety closure**                  | For `Name(o)`, `o` contains no delete-class character, no separator-class character, no leading `-`, no trailing dot or space, and (unless `--case keep`) is entirely in the requested case.                                                                                                        |
+| **Length bound**                    | For `Name(o)`, `o` satisfies both the byte and UTF-16-unit limit for the resolved policy, for every input, including inputs made of astral emoji only.                                                                                                                                              |
+| **No grapheme splitting**           | For `Name(o)`, the grapheme cluster count of `o` is not greater than that of `x`, and every cluster in the output is a complete cluster from the input or a replacement character we chose. Holds on the whole-name fallback of §3.10 step 3 as well as the stem path of step 2.                    |
+| **Non-empty**                       | For `Name(o)`, `o` is never `""`, `"."`, or `".."`. The empty/dot cases are exactly what `Unrepresentable` exists to carry instead (§3.14).                                                                                                                                                         |
+| **Dotfile preservation**            | For `Name(o)`, `x` starts with exactly one `.` implies `o` starts with exactly one `.`, and vice versa.                                                                                                                                                                                             |
+| **Valid UTF-8 is never re-decoded** | For every valid-UTF-8 `x`, the `Decoded` variant is `Utf8` and the `Repaired` path is never entered. This is P2 as an executable assertion, and it is the regression test for detox's `café.txt -> cafÃ©.txt` (doc 01 §7, doc 05).                                                                  |
+| **Stage independence**              | Disabling stage N changes only what stage N is documented to change: the output with stage N off equals the output of the pipeline with stage N replaced by identity. Catches the scope-creep bug detox had, where the UTF-8 filter also did safe-filter work (#40, #86, doc 02 theme 2).           |
 
 ### 8.2 Property tests against `plan`
 
-| Property                    | Statement                                                                                                                                                                            |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **No collision**            | For any set of entries and any policy, the plan's `Rename` items have pairwise-distinct `(dir, NFC(casefold?(to)))`. This is the executable form of the maintainer's #130 objection. |
-| **No pre-existing clobber** | No `Rename` item's `to` equals an entry that exists and is not that item's own `from`.                                                                                               |
-| **Order safety**            | Applying the plan in the plan's own order never renames a directory before an item inside it.                                                                                        |
-| **Determinism**             | Shuffling the input entry list produces an identical plan, including collision numbering. Directly targets the `readdir()`-order dependence in detox (doc 01 §5, scope note).        |
-| **Undo round-trip**         | Apply plan then undo journal, against an in-memory filesystem model, restores the exact original name set.                                                                           |
+| Property                    | Statement                                                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **No collision**            | For any set of entries and any policy, the plan's `Rename` items have pairwise-distinct `(dir, NFC(casefold?(to)))`. This is the executable form of the maintainer's #130 objection.                                                                                                                                                                                                                                   |
+| **No pre-existing clobber** | No `Rename` item's `to` equals an entry that exists and is not that item's own `from`.                                                                                                                                                                                                                                                                                                                                 |
+| **Order safety**            | Applying the plan in the plan's own order never renames a directory before an item inside it.                                                                                                                                                                                                                                                                                                                          |
+| **No sibling chains**       | No `Rename` item's destination equals another `Rename` item's `from` in the same directory. This is the executable form of §5.3's argument that swaps and chains cannot arise from an idempotent `transform`; if it ever fails, Idempotence failed first. Generated inputs must include near-swap pairs (`a_b`/`a-b`, `A.txt`/`a.txt` under `--case lower`), which the Order-safety property does not exercise at all. |
+| **Bounded renumbering**     | Renumbering either produces a name inside the length limit or yields `Conflict`, in at most 998 candidate probes per source, for every limit including limits too small for any suffix (§5.3).                                                                                                                                                                                                                         |
+| **Determinism**             | Shuffling the input entry list produces an identical plan, including collision numbering. Directly targets the `readdir()`-order dependence in detox (doc 01 §5, scope note).                                                                                                                                                                                                                                          |
+| **Undo round-trip**         | Apply plan then undo journal, against an in-memory filesystem model, restores the exact original name set.                                                                                                                                                                                                                                                                                                             |
 
 ### 8.3 Snapshot tests (`insta`)
 
@@ -1118,7 +1386,7 @@ punctuation; a CP1252 `Bj\xf6rk` byte string; an invalid-UTF-8 lone `\xff`.
 | Length limit probe             | ext4, tmpfs, both APFS images                                                               | The detected limit matches the empirical binary search from doc 06 Test 1 (255 bytes on ext4; 255 ASCII / 127 astral-emoji on APFS).                                                                                                                                                                                         |
 | `RENAME_NOREPLACE` unsupported | A mount where it fails (or an injected failure)                                             | Falls back, warns once, still never clobbers.                                                                                                                                                                                                                                                                                |
 | Non-UTF-8 name                 | Linux tmpfs (APFS rejects them, per doc 01 §7 and doc 05)                                   | Repaired if CP1252-plausible, `Opaque`-skipped otherwise, never panics. This is the test rnr fails.                                                                                                                                                                                                                          |
-| Symlink to `../..` under `-r`  | Linux, macOS                                                                                | Recursion does not escape the tree. Regression test named for detox #23 (doc 05 correction #2).                                                                                                                                                                                                                              |
+| Symlink to `../..` under `-r`  | Linux, macOS                                                                                | Recursion does not escape the tree. Named for the hazard #23 documented (doc 05 correction #2); not a regression test against upstream, which fixed its own instance in 2.0.0-beta1 (§5.6).                                                                                                                                  |
 | Rename-during-walk             | 5000-entry tree                                                                             | Every entry is visited exactly once; no entry visited under both its old and new name.                                                                                                                                                                                                                                       |
 | Crash mid-batch                | Kill after N renames                                                                        | Journal replay identifies the exact interrupted item; `undo` restores the completed ones.                                                                                                                                                                                                                                    |
 | Huge tree                      | 200k entries                                                                                | Completes; memory stays bounded; `criterion` benchmark recorded so a regression is visible. Also the stability test detox never had: doc 05 corrects doc 02 upward to at least three independent crash bugs (#11, #96, #137), which in Rust are mostly a class of bug we do not get to have, but OOM on a large snapshot is. |
@@ -1175,15 +1443,31 @@ than as a product, which is a ceiling on the project's identity if it outlives d
 
 ### 9.2 Relationship to detox
 
-A successor, not a fork, not a drop-in. Positioned as: "detox is unmaintained and being wound
-down; here is what to use instead."
+A successor, not a fork, not a drop-in. Positioned as: "detox is **archived** (upstream,
+2026-07-12); here is what to use instead." Archived, not merely unmaintained: the repository is
+permanently read-only, so there is no upstream to coordinate with, no PR that could ever be
+accepted, and no issue that could be filed to settle a question. Every decision below that might
+otherwise have deferred to upstream is ours to make and ours to own.
 
 - No `detoxrc` parsing, ever, in any form. This is option 3 from doc 04 §6A. Reason: the config
   grammar _is_ the thing the mandate rejects, and doc 05 records that even detox's own merge
   semantics were never behaviorally verified. Instead: a `MIGRATING-FROM-DETOX.md` table mapping
   every detox filter to its `detoxrs` equivalent, plus a `detoxrs --explain-detox <sequence>`
   helper that reads a `detoxrc` **read-only** and prints the closest flag set, refusing to write
-  anything. That is a docs feature with a shell, not a parser we have to maintain.
+  anything. That is a docs feature with a shell, not a parser we have to maintain. Archival is what
+  makes both finite: detox's filter set, config grammar, and CLI surface are frozen at v3.0.1 and
+  will never grow another filter, so the mapping table is a one-time write, not a maintenance
+  treadmill.
+- Two migration notes the mapping table must carry, because they are behavior differences a
+  detox user will otherwise hit blind. (a) detox's `-r` only gates descent _past_ the first level
+  of a named directory: the immediate children of a directory argument are processed with or
+  without `-r` (doc 10, `-r`). `detoxrs` does not copy that: without `-r` a directory argument has
+  only its own basename cleaned, and nothing inside it is touched. (b) detox's `.tbl` grammar has
+  locale-conditional filter blocks (`start "<lang>" ... end`, activated by `setlocale(LC_CTYPE,"")`,
+  doc 11 §4, doc 12 §4, doc 13 §3). `detoxrs` has **no** locale-conditional behavior anywhere: the
+  same input produces the same output under every locale. That is a deliberate drop, not an
+  oversight — a rename whose result depends on the ambient environment cannot be previewed
+  honestly, and P1 forbids the table mechanism that carried it.
 - No flag aliasing (doc 04 §6B option 2). `-n` happens to mean the same thing in both, which is
   a coincidence we will accept but not extend. `-r` also matches. `-v` matches. Nothing else.
   Notably `-f` is _not_ accepted, because it means "config file" in detox and "force" in rnr, and
@@ -1215,11 +1499,14 @@ Not competitors on the same axis, and the README will say so plainly.
 
 ### 9.4 Packaging path
 
-Order matters, because doc 07 row 8b found the bar is eroding rather than static: detox is in
-Debian 11-14, Fedora 38-44 + Rawhide, Arch, and nixpkgs (Repology, though **[UNVERIFIED]**: the
-direct fetch failed in both research passes and rests on a search-summarized snapshot), _and_ its
-Homebrew formula is deprecated with a hard disable date of 2027-07-28. There is a dated window
-here.
+Order matters, because doc 07 row 8b found the bar is eroding rather than static, and archival
+makes the erosion one-way: detox is in Debian 11-14, Fedora 38-44 + Rawhide, Arch, and nixpkgs
+(Repology, though **[UNVERIFIED]**: the direct fetch failed in both research passes and rests on a
+search-summarized snapshot), _and_ its Homebrew formula is deprecated with a hard disable date of
+2027-07-28. Because upstream is archived, that footprint is frozen at v3.0.1 forever: it can only
+be dropped by each distro, never refreshed. So the window is not merely dated, it is one-directional
+— every distro that removes detox is a set of users with nowhere to land, and there will never be a
+competing upstream release to displace.
 
 1. **GitHub Releases with prebuilt static binaries.** `cargo-dist` (now branded `dist`, though
    `cargo-dist` remains the installable crates.io name because the bare `dist` name is squatted:
@@ -1231,11 +1518,21 @@ here.
 3. **Nix**: `rustPlatform.buildRustPackage` with `cargoLock.lockFile`, plus a flake.
 4. **Arch AUR**: cheap, `makepkg` can build against network-fetched deps.
 5. **Debian and Fedora last**, and this is where §7.2's dependency budget pays: every crate is a
-   separate Debian source package built offline (doc 04 §5, confirmed). Ten direct dependencies
+   separate Debian source package built offline (doc 04 §5, confirmed). Eleven direct dependencies
    is a tractable debcargo job; forty is not.
+
+**No Snap**, and it is worth declining explicitly because detox ships one. Doc 13 §5.1 records that
+detox's snap uses `devmode` confinement and is pinned to a stale tarball — i.e. the precedent is a
+package that gave up on the confinement model that is Snap's whole point, for a tool whose job is to
+rename arbitrary files anywhere the user can reach. A strictly confined snap could not do that job,
+and a `devmode` snap is a tarball with extra steps. Skipped, not forgotten.
 
 MSRV: rolling, "stable at least 6 months old," declared via `rust-version`, checked with
 `cargo-msrv` in CI and re-checked after every dependency bump (doc 04 §5).
+
+Messages are **English-only**, like upstream (detox has no gettext layer and no localized strings at
+all: doc 13 §3, §8). Not revisited for v1.0, and stated rather than left silent because §8.3 pins
+`--help` as a snapshot-tested contract, which any future localization would have to plan around.
 
 ---
 
@@ -1251,10 +1548,27 @@ No config file. No profiles. No rules. No transliteration.
 The MVP boundary is drawn at "safety architecture complete, customization absent," because
 §5 is the part that is hard to retrofit and §4 is the part that is trivial to add.
 
+That stage list is a **strict subset of the on-by-default pipeline**, and the two on-by-default
+behaviors it defers are named rather than left for someone to discover from a diff:
+
+- **Stage 2 (`url_decode`) is on by default in §3.2 but absent from v0.1.** So v0.1's output for
+  `invoice%20final.pdf` is `invoice%20final.pdf`, not `invoice_final.pdf`, and the §2.2 worked
+  example is a v0.2 output. Acceptable for a walking skeleton because a surviving `%20` is ugly, not
+  unsafe, and because the all-or-nothing validation rule (§3.11) is the fiddly part and deserves its
+  own release. Not acceptable silently, which is why it is here.
+- **Stage 11 (`target`) is absent, and this one costs nothing observable**, because stage 11 is
+  identity under the default `--target unix` (§3.2 row 11: the reserved-stem and illegal-character
+  checks fire only under `windows`/`portable`). The globally-applied piece of Windows defensiveness
+  is the trailing dot/space strip, and that lives in stage 10, which v0.1 ships. Correspondingly,
+  **v0.1's stage 13 fixed-point loop re-runs 9/10 only**; stage 11 joins the loop in v0.3 when
+  `--target` arrives. §3.2's "re-run 9/10/11" describes the v1.0 pipeline. This is the deliberate
+  reading of §6.5's conservative reserved-name default: it is a `--target`-gated rule, not an
+  always-on global one, and §6.5 should be read that way.
+
 ### v0.2
 
-Config file (§4.2), discovery and precedence (§4.3), `[profile.*]`, `[[rule]]`, `--keep`/
-`--strip`, `--case`, `--ascii`, stage 2 (`url_decode`), stage 6.
+Config file (§4.2), discovery and precedence (§4.3), `--print-config`, `[profile.*]`, `[[rule]]`,
+`--keep`/`--strip`, `--case`, `--ascii`, stage 2 (`url_decode`), stage 6.
 
 ### v0.3
 
@@ -1292,7 +1606,22 @@ running in CI.
 ## 11. Open questions and required spikes
 
 Each one is a decision the research could not responsibly settle. Each names what evidence closes
-it. Spikes 1-4 gate v1.0.
+it.
+
+Gating, labelled by what each actually blocks rather than by a blanket "1-4 gate v1.0" that the
+spikes' own text contradicts:
+
+| Gate                                                                                   | Spikes      |
+| -------------------------------------------------------------------------------------- | ----------- |
+| Any public commit (the name is in every path and manifest)                             | 1           |
+| v0.1 Tier-1 correctness (the default pipeline and the rename path v0.1 actually ships) | 2, 6        |
+| v1.0, Windows best-effort tier only                                                    | 3, 4        |
+| v1.0, everything else                                                                  | 5, 7, 8, 11 |
+| Nothing; informational or post-1.0                                                     | 9, 10, 12   |
+
+Spike 2 in particular is mislabelled if called v1.0-only: v0.1 ships `renameat2` no-clobber plus
+runtime demotion, so how often the fallback is the _normal_ path is a v0.1 correctness question.
+Spike 6 governs stage 1, which is on by default from v0.1.
 
 **1. Is `detoxrs` actually available?** (blocks any public commit)
 Doc 07 row 9b: availability was **UNVERIFIABLE** because no candidate existed; doc 07 row 9a:
@@ -1305,7 +1634,7 @@ Debian's `apt-file`/`command-not-found` index, Homebrew, and the `busybox`/coreu
 Fallbacks, in order: `detoxr`, `namewash`, `sanename`. Note the trademark question applies with
 extra force to a `detox`-derived name given the unrelated wellness-industry branding (doc 04 §5).
 
-**2. `renameat2(RENAME_NOREPLACE)` behavior in the wild.** (blocks v1.0)
+**2. `renameat2(RENAME_NOREPLACE)` behavior in the wild.** (blocks v0.1 Tier-1 correctness)
 Doc 06 row 4c marks the Linux syscall and doc 03's filesystem support matrix **UNVERIFIED**: no
 Linux machine existed in any research pass. Doc 06's Load-Bearing Uncertainties repeats this.
 _Closes with:_ a matrix run on real Linux: ext4, xfs, btrfs, tmpfs, overlayfs, NFSv4, CIFS, ZFS,
@@ -1336,7 +1665,7 @@ _Closes with:_ the case-only rename test against SMB (macOS and Linux clients), 
 exFAT card. If any fails with `EEXIST`, the two-step temp-name dance comes back, but as a
 per-filesystem fallback triggered by an observed error, never as an unconditional default.
 
-**6. Does the CP1252 repair path work on a real mis-encoded name?**
+**6. Does the CP1252 repair path work on a real mis-encoded name?** (blocks v0.1 Tier-1 correctness: stage 1 is on by default)
 Doc 05's Load-Bearing Uncertainties: a genuinely mis-encoded non-UTF-8 filename was **never
 materialized or tested on any platform in any research pass**, because APFS rejects invalid UTF-8
 at the syscall level. Doc 01 §7 records the same wall. Our entire §3.4 story rests on this.
@@ -1374,23 +1703,116 @@ so the Debian/Fedora/Arch/nixpkgs version list is a search-summarized snapshot, 
 _Closes with:_ a direct query to Repology's API from a machine with working DNS, before any
 "distribution parity" claim appears in a README.
 
+**11. Do unrepresentable names occur often enough to deserve a placeholder policy?** (blocks v1.0)
+§3.14 resolves the design contradiction by skipping a name that reduces to nothing (`***`), which is
+the conservative and P3/P4-consistent answer. What it does _not_ settle is whether skipping is the
+_useful_ answer. No research source touches this: no tracker issue in doc 02 concerns an
+all-punctuation filename, and nothing in docs 10-13 shows how detox behaves on one (detox's own
+`safe` filter maps ASCII control characters to `_` rather than deleting, doc 12 §3.1, so it
+structurally cannot produce an empty name and never had to answer this question).
+_Closes with:_ counting, over large real trees (a Downloads directory, a media library, a scratch
+directory, and an extracted archive corpus), how many entries `transform` returns `Unrepresentable`
+for, broken down by reason. If the count is effectively zero, skipping is obviously right and the
+question closes. If a real class of such names exists (emoji-only names and all-punctuation names are
+the plausible candidates), the follow-up decision is a `--on-unrepresentable <skip|placeholder>`
+flag, where the placeholder would have to be derived from the input (a hash stub) rather than
+invented, so that two such names in one directory do not collide. Do not add the flag before the
+count exists.
+
+**12. Is three the right bound for the stage-13 fixed-point loop?**
+§3.14 makes non-convergence a first-class outcome (`Unrepresentable(NotConverged)`, skip and report)
+rather than an undefined behavior, which removes the safety question. It does not answer the
+engineering one: nobody has shown either that three iterations always suffice or that any input
+needs more than two. Three interacting fixups (truncation creating a trailing dot, truncation
+creating a reserved stem, either re-triggering a collapse) is exactly the shape that oscillates, and
+the bound was chosen by taste.
+_Closes with:_ the §8.5 fuzz target instrumented to record the iteration count reached, run over the
+`--target windows` policy (where stage 11 participates and so the interaction is richest) with tight
+`--max-len` values, which is the corner most likely to oscillate. If nothing observed exceeds two,
+raise the bound to a comfortable 8 and treat `NotConverged` as a genuine internal-bug signal. If
+something legitimately needs more, the loop needs an invariant, not a bigger number. Cheap, and it
+turns a taste-driven constant into a measured one.
+
 ---
 
 ## Appendix A: traceability of the biggest calls
 
-| Decision                                                             | Primary evidence                                     | Validation effect                                                                                                                                                               |
-| -------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Fixed pipeline, no sequences or `.tbl`                               | doc 02 theme 1 (~15 issues, highest weight); mandate | doc 05 confirms the #124 "many requests of this nature" quote verbatim                                                                                                          |
-| Legacy decode only on invalid UTF-8                                  | doc 01 §7 (`café.txt -> cafÃ©.txt`)                  | doc 05 reproduced it verbatim                                                                                                                                                   |
-| Transliteration off by default                                       | doc 02 theme 5 (#47/#53 -> #99 -> #21 -> #112/#113)  | doc 05 corrects doc 01: no legacy `safe.tbl`; transliteration lived in `unicode.tbl` only                                                                                       |
-| Dry-run default                                                      | doc 04 §1 (f2, rnr)                                  | doc 07 rows 1a/1c confirm both; row 8c confirms detox does _not_                                                                                                                |
-| No overwrite, ever                                                   | doc 02 theme 6 (#130, #122, #124)                    | doc 05 confirms the #130 rejection verbatim, all four technical points                                                                                                          |
-| Snapshot walk, apply deepest-first                                   | doc 03 constraint 11; doc 01 §6                      | n/a                                                                                                                                                                             |
-| No temp-name dance for case-only renames                             | doc 03 constraint 2 said otherwise                   | doc 06 Test 3 **refutes** doc 03; we follow doc 06                                                                                                                              |
-| Hand-written macOS FFI shim budgeted                                 | doc 03 constraint 10 implied crate support           | doc 06 row 4e **refutes** it: neither `rustix` nor `nix` exposes `renamex_np`                                                                                                   |
-| Grapheme-safe truncation, own implementation                         | doc 03 constraint 7                                  | doc 06 row 5a: `sanitize-filename` splits clusters (from source)                                                                                                                |
-| APFS limit = 255 UTF-16 units                                        | doc 03 constraint 7 (2-point test)                   | doc 06 Test 1 confirms with a 4-way discriminated test; we use the refined numbers                                                                                              |
-| Journal in XDG_STATE_HOME, not temp                                  | doc 04 §2                                            | doc 07 row 1b: f2 uses `os.TempDir()`; explicitly a cautionary example, not a precedent                                                                                         |
-| No `figment`, no `jwalk`, no `unicode_skeleton`                      | doc 03/04 recommended all three                      | doc 06 rows 5c/5d and doc 07 row 7b found all three stale                                                                                                                       |
-| Symlink recursion has no flag                                        | doc 02 called symlinks a weak theme                  | doc 05 correction #2 **refutes** that: #23 is a real blast-radius incident                                                                                                      |
-| Name is `detoxrs` (binary `detoxrs` + `dtx`), never the bare `detox` | doc 04 §5, §6C; user direction                       | doc 07 rows 9a/9b: availability unverifiable (no candidate existed to check), `detoxpy` collision, squatting precedent; doc 07 row 8b: `detox` binary name is live in 4 distros |
+| Decision                                                             | Primary evidence                                     | Validation effect                                                                                                                                                                                                                            |
+| -------------------------------------------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fixed pipeline, no sequences or `.tbl`                               | doc 02 theme 1 (~15 issues, highest weight); mandate | doc 05 confirms the #124 "many requests of this nature" quote verbatim                                                                                                                                                                       |
+| Legacy decode only on invalid UTF-8                                  | doc 01 §7 (`café.txt -> cafÃ©.txt`)                  | doc 05 reproduced it verbatim                                                                                                                                                                                                                |
+| Transliteration off by default                                       | doc 02 theme 5 (#47/#53 -> #99 -> #21 -> #112/#113)  | doc 05 corrects doc 01: no legacy `safe.tbl`; transliteration lived in `unicode.tbl` only                                                                                                                                                    |
+| Dry-run default                                                      | doc 04 §1 (f2, rnr)                                  | doc 07 rows 1a/1c confirm both; row 8c confirms detox does _not_                                                                                                                                                                             |
+| No overwrite, ever                                                   | doc 02 theme 6 (#130, #122, #124)                    | doc 05 confirms the #130 rejection verbatim, all four technical points                                                                                                                                                                       |
+| Snapshot walk, apply deepest-first                                   | doc 03 constraint 11; doc 01 §6                      | n/a                                                                                                                                                                                                                                          |
+| No temp-name dance for case-only renames                             | doc 03 constraint 2 said otherwise                   | doc 06 Test 3 **refutes** doc 03; we follow doc 06                                                                                                                                                                                           |
+| Hand-written macOS FFI shim budgeted                                 | doc 03 constraint 10 implied crate support           | doc 06 row 4e **refutes** it: neither `rustix` nor `nix` exposes `renamex_np`                                                                                                                                                                |
+| Grapheme-safe truncation, own implementation                         | doc 03 constraint 7                                  | doc 06 row 5a: `sanitize-filename` splits clusters (from source)                                                                                                                                                                             |
+| APFS limit = 255 UTF-16 units                                        | doc 03 constraint 7 (2-point test)                   | doc 06 Test 1 confirms with a 4-way discriminated test; we use the refined numbers                                                                                                                                                           |
+| Journal in XDG_STATE_HOME, not temp                                  | doc 04 §2                                            | doc 07 row 1b: f2 uses `os.TempDir()`; explicitly a cautionary example, not a precedent                                                                                                                                                      |
+| No `figment`, no `jwalk`, no `unicode_skeleton`                      | doc 03/04 recommended all three                      | doc 06 rows 5c/5d and doc 07 row 7b found all three stale                                                                                                                                                                                    |
+| Symlink recursion has no flag                                        | doc 02 called symlinks a weak theme                  | doc 05 correction #2 **refutes** the "weak theme" reading: #23 is a real blast-radius incident. But upstream fixed #23 in 2.0.0-beta1 (verified in clone `0a8e212`), so the argument rests on the hazard, not on a live upstream flaw (§5.6) |
+| Name is `detoxrs` (binary `detoxrs` + `dtx`), never the bare `detox` | doc 04 §5, §6C; user direction                       | doc 07 rows 9a/9b: availability unverifiable (no candidate existed to check), `detoxpy` collision, squatting precedent; doc 07 row 8b: `detox` binary name is live in 4 distros                                                              |
+
+---
+
+## Review record (stage 3)
+
+Three independent reviewers examined this document under different lenses: **L1** source fidelity and
+citation audit, **L2** completeness and internal/cross-document consistency, **L3** implementer
+reliability. Every finding is adjudicated below. Rejections are included on purpose: two reviewer
+recommendations would have made the document worse, and one rested on a misreading of §6.5.
+
+Findings marked **[verified here]** were checked against a primary source during adjudication rather
+than taken from a reviewer's summary: the GitHub API for upstream status, the pinned upstream clone
+`0a8e212` for `CHANGELOG.md`, `README.md`, `src/file.c`, and `src/clean_string.c`.
+
+| Finding (reviewer)                                                                                                                                                                                                                                               | Verdict                  | Action taken, or reason for rejection                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Upstream is **archived**, never stated; softened to "unmaintained and being wound down" (L1 CRITICAL, L2 CRITICAL)                                                                                                                                               | **ACCEPTED**             | **[verified here]** GitHub API: `archived: true`, `open_issues_count: 0`, 446 stars, `pushed_at 2026-07-12`. Stated once at the top of the document as the fact everything else relies on, with the "34 issues closed in one ~50-minute administrative sweep, so closed means demand and not rejection" reading made explicit. §9.2 rewritten to "archived (upstream, 2026-07-12)" with the consequence spelled out: no upstream to coordinate with, no PR that could be accepted, no issue that could be filed. §9.4's packaging argument re-derived: the distro footprint is frozen at v3.0.1 and can only be dropped, never refreshed, so the window is one-directional rather than merely dated. §9.2 also now notes archival is what makes `MIGRATING-FROM-DETOX.md` and `--explain-detox` finite deliverables. Re-examined §9 and §11 for arguments needing a live upstream: none found — §11's spikes are all our own measurements, and spike 8's "user feedback" means our users.                                                                                                                                                                                                           |
+| Mandate quote truncated, omitting the README's "So, `detox` is paused" (L1, inside CRITICAL)                                                                                                                                                                     | **ACCEPTED**             | **[verified here]** README `0a8e212` lines 25-26. Both closing sentences quoted, with the line citation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| §5.6's symlink policy justified by #23 as a live architectural flaw; doc 10 shows it was fixed in 2.0.0-beta1 (L2 CRITICAL)                                                                                                                                      | **MODIFIED**             | **[verified here]** `CHANGELOG.md` line 144 under `## [2.0.0-beta1] - 2021-03-05`, Security: "Symlinks that point at directories are no longer followed when `--special` and `-r` are specified together. [#23]"; structurally confirmed at `src/file.c:218-223`, where `lstat` + `S_ISDIR` means `parse_dir` never descends through a symlink; `man/detox.1:109` documents it. The reviewer is right that the citation was stale. **The policy is unchanged** — it is right on its own merits — but the argument is rebuilt: #23 is now cited as a first-person account of the _hazard_ (one relative symlink turning a scoped run into a whole-home-directory run), explicitly not as a live flaw, with the fix version named; #20 (symlink loops, untested) is unaffected by the #23 fix and carries the "nobody has characterized this" weight. §4.4, §8.4, and Appendix A corrected in the same direction; the §8.4 case is relabelled as asserting our construction rather than as a regression test against upstream.                                                                                                                                                                        |
+| Stage 13's empty-name fallback ("keep the original name") falsifies §8.1 Safety closure; `***` is a counterexample (L3 CRITICAL)                                                                                                                                 | **ACCEPTED**             | Traced by hand and confirmed: `***` -> `___` (stage 7) -> `_` (stage 9) -> `` (stage 10) -> fallback `***`, which contains three separator-class characters. A release gate the default pipeline violates on a three-character input is not a gate. Resolved as a design decision in new **§3.14**: `transform` returns `TransformResult::Unrepresentable(ReducesToEmpty                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | ReducesToDotOrDotDot | NotConverged)`and the planner skips the entry unchanged, reported like`Opaque`. No invented placeholder — a placeholder is a taste-driven guess (P4) that would also collide with every other unrepresentable name in the directory. Stage 13's row in §3.2 rewritten accordingly. §8.1 re-scoped: name-properties quantified over `Name(_)`, plus a new **Totality** property so the scoping is not a loophole. The residual design question (do such names occur often enough to earn a placeholder policy?) is §11 question 11, not a decision invented here. |
+| §3.7 delete class re-includes stage 4's invisibles, making `--no-invisible-strip` a dead flag and falsifying Stage independence (L3 CRITICAL)                                                                                                                    | **ACCEPTED**             | Delete class narrowed to control characters only (`Cc` plus DEL and NUL), with the reason stated inline: if it duplicated stage 4's set the flag would be dead and Stage independence false.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Stage 13's 3-iteration bound has no defined non-convergence behavior (L3 CRITICAL)                                                                                                                                                                               | **ACCEPTED**             | `Unrepresentable(NotConverged)` in §3.14: same skip path, logged at `-v` with intermediate states, treated as a bug report against us. No silent non-idempotent output, no runtime-raised bound, no panic. Whether 3 is the right number is now §11 question 12 with a cheap closing experiment (instrument the fuzz target's iteration count under `--target windows` with tight `--max-len`), rather than a taste-driven constant defended in prose.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `transform` purity vs stage 12's filesystem-detected limit; Length Bound proptest not implementable as specified (L3 CRITICAL)                                                                                                                                   | **ACCEPTED**             | §3.1 now states that the `Policy` reaching `transform` is always fully resolved (`max_len` concrete, never the CLI's `0 = auto` sentinel) and that resolution is a walk-time concern producing one resolved `Policy` per directory. §8.1 gains a blanket scoping rule: every property is quantified over resolved policies.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| §5.3 renumber-then-truncate has no termination bound and no failure mode (L3 CRITICAL)                                                                                                                                                                           | **ACCEPTED**             | Bounded exactly like stage 13 and stated: N = 2..999, each candidate truncated to fit, against existing names plus already-allocated destinations; if none fits, the item is an unresolvable `Conflict` routed by `--on-collision`. Never drop the numbering, never exceed the limit, never guess. New §8.2 **Bounded renumbering** property.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| §5.1/§8.2 do not address sibling rename cycles or swaps (L3 CRITICAL)                                                                                                                                                                                            | **MODIFIED**             | The gap was real — the document said nothing — but the reviewer's remedy (cycle detection, temp-name routing, topological ordering) is unnecessary and would have added the one thing §5.4 works hardest to avoid: a rename to a name the user never asked for. Cycles and chains are **structurally impossible** given the document's own non-negotiable Idempotence property: if `f(a) = b` and `f(b) = a` then `f(f(a)) = f(a)` forces `f(b) = b`, so `a = b`; the same argument collapses `f(a) = b, f(b) = c` to `c = b`, meaning the second entry is `Unchanged`, which is an ordinary pre-existing-destination conflict layers 1-2 already handle. Renumbering cannot manufacture one because it only allocates free names. §5.3 now carries the proof, plus the cheap guard the proof deserves: a plan-time assertion that refuses the batch as an internal error if a `Rename` destination ever equals another `Rename`'s `from`. §8.2's property is **No sibling chains** (with near-swap generators), not cycle handling. Rejected the temp-name dance outright: an invented intermediate name is a P3 surprise and would put a state in the journal that no forward plan ever produced. |
+| Canonical `--help` omits `--legacy-encoding`, `--stdin`, `--explain-detox`, `--help-transforms` while §8.3 calls help a snapshot-tested contract (L2 CRITICAL)                                                                                                   | **ACCEPTED**             | All four added to the appropriate `--help` sections, plus the `detoxrs [OPTIONS] --stdin` usage line.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| §2.2's `..bad  name...txt -> .bad_name.txt` is not producible: `.` is Keep-class so stage 9 never collapses the interior dots (L3 MAJOR)                                                                                                                         | **MODIFIED**             | The reviewer traced correctly, but the defect was in the spec, not the example — collapsing repeated `.` is behavior the document wants (and detox had, by a worse mechanism). Fixed at the source: stage 9's collapse set is now stated explicitly as `.`, `-`, `_`, and the configured `--separator`, with the clarification that Keep-class means "not deleted and not substituted", not "exempt from collapsing". Example left as written because it is now correct.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| §3.7 vs §3.8: `-` is Keep-class but `a--b -> a-b` requires collapsing it; the actual collapse rule is never stated (L3 MAJOR)                                                                                                                                    | **ACCEPTED**             | Same §3.8 rewrite. Also states what does _not_ collapse (`aaa` stays `aaa`) and why a run produced by stage 7 does (`" & " -> "___" -> "_"`), so `_-_` surviving and `a--b` collapsing follow from one rule instead of two examples.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| §2.2's Björk example shows `--ascii` applied to one sibling and not the other, with no flag shown (L3 MAJOR)                                                                                                                                                     | **ACCEPTED**             | Split into two invocations: the default keeps `ö` for both files, and a second `detoxrs --ascii` invocation shows the opted-in transliteration. Reinforced with one line naming §3.6 and pointing out that `_-_` survives by stage 9's rule.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| §2.2's `Icon\r` "skipped (excluded)" implies a built-in default exclude list that is never specified (L3 MAJOR)                                                                                                                                                  | **ACCEPTED**             | Annotated inline: the example assumes the §4.2 user config, **there is no built-in default exclude list**, the only unconditional skips are `.git`/`.hg`/`.svn` and dotfiles during recursion, and with no config `Icon\r` would become `Icon`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| §7.2's dependency table names 11-12 crates against a CI-enforced "<= 10 direct" cap; the "<= 45 crates in `cargo tree`" figure was never measured (L2 MAJOR, L3 MAJOR)                                                                                           | **ACCEPTED**             | Cap restated as "<= 11 direct dependencies" with the count done honestly (`serde` and `toml` are one row but two packages; `terminal_size` is the 11th line until deleted, and must be resolved before first release). The transitive-crate figure is **struck** rather than adjusted: nobody has run `cargo tree` against this set, so it is marked **[UNVERIFIED]** with the real ceiling to be written into CI by the first `cargo add` commit. §9.4's "Ten direct dependencies" updated to eleven. A budget a CI check turns into a lie on day one is worse than no budget.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| §10's v0.1 stage list omits on-by-default stage 2 and stage 11 with no note (L2 MAJOR); v0.1 cannot implement stage 13's "re-run 9/10/11" without stage 11 (L3 MAJOR)                                                                                            | **ACCEPTED**             | §10 now states that v0.1's stage list is a strict subset of the on-by-default pipeline and names both deferrals with their consequences: stage 2's absence means v0.1 leaves `%20` alone (ugly, not unsafe, and the §2.2 example is a v0.2 output); stage 11 is identity under the default `--target unix`, so its absence costs nothing observable, and **v0.1's stage 13 re-runs 9/10 only**, with 11 joining the loop in v0.3.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| §6.5's conservative reserved-name rule is presented as an always-on global safety property that v0.1 does not actually deliver (L2 MAJOR)                                                                                                                        | **REJECTED**             | Misreads §6.5. The reserved-stem and illegal-character checks are `--target windows`/`portable`-gated in §3.2 row 11, in §6.5's own sentence ("`--target windows` also applies the illegal-character set..."), and in §3.13's opt-in column. The only piece applied on all platforms is the trailing dot/space strip, which lives in stage 10, ships in v0.1, and §6.5 says so. There is no contradiction to fix. The genuine wrinkle the reviewer was circling — stage 13's fixed-point loop naming stage 11 — is L3's finding and is addressed above; §10 now states the `--target`-gated reading explicitly so this misreading is harder to repeat.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| No SIGINT/SIGTERM handling anywhere, despite heavy emphasis on crash resilience (L2 MAJOR)                                                                                                                                                                       | **ACCEPTED**             | New §5.8: a flag-setting handler, checked between items, stops cleanly and writes the summary and closing journal state; an in-flight `rename(2)` is a single syscall and is not interrupted; Ctrl-C leaves a fully recorded prefix that `undo --last` reverts. `SIGKILL` remains safe via the `intent`/fsync/rename/`done` protocol, which reports the one unknown item rather than guessing.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| No error taxonomy for `EROFS`/`ENOSPC`/`EACCES`; journal write is itself I/O that can fail (L2 MAJOR)                                                                                                                                                            | **ACCEPTED**             | §5.8 names the enum variants §7.2 promised but never showed, and answers the sharp version of the question: if the `intent` record cannot be written or fsynced, **the rename does not happen**, because an unjournaled rename is the one thing `undo` cannot reverse. `EROFS`/`ENOSPC` abort the remainder after the first occurrence instead of printing 200k identical lines. `ENAMETOOLONG` is called out as evidence our detected limit was wrong.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Unreadable directory / `EMFILE` during the walk not addressed (L2 coverage gap)                                                                                                                                                                                  | **ACCEPTED**             | §5.8: unreadable directory is reported and skipped, walk continues (matching detox, doc 13 §4.4); `EMFILE`/`ENFILE` aborts before any rename, because an incomplete snapshot is the one thing the two-phase design in §5.1 cannot tolerate.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| No behavior stated for concurrent `detoxrs -x` runs; journal names are not a lock (L2 MAJOR)                                                                                                                                                                     | **MODIFIED**             | Recorded as an **explicit non-goal**, and the lock file rejected with a reason. What already bounds the damage is in the design: no-clobber renames, `apply`'s `(dev, ino, mtime)` recheck, one journal file per batch. A lock would have to be advisory, on a path we do not own, with a stale-lock story, to prevent an outcome that is already non-destructive. Stating the non-goal is the fix; building the lock is not.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| §7.3's 1200-1800 LOC estimate is thin against its own itemized scope; reviewer proposed 2500-4000+ (L3 MAJOR)                                                                                                                                                    | **MODIFIED**             | The criticism holds — the estimate read as whole-project while its itemized pieces already consumed a fifth of it — but 4000 is high for a single-binary tool with eleven dependencies. Split into **v0.1: 1200-1800** and **v1.0: 2200-3000**, with the three parts that historically blow such estimates named individually (journal, collision engine, `report.rs`) rather than averaged away, and the range labelled a budget to be checked at v0.1 rather than a prediction.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| §11's "spikes 1-4 gate v1.0" contradicted by the spikes' own annotations (L3 MAJOR)                                                                                                                                                                              | **ACCEPTED**             | §11 opens with a gating table keyed to what each spike actually blocks: 1 blocks any public commit; 2 and 6 block v0.1 Tier-1 correctness (v0.1 ships the `renameat2` path and stage 1 is on by default); 3 and 4 block only the Windows tier; 5, 7, 8, 11 block v1.0; 9, 10, 12 gate nothing. Spike 2's and spike 6's inline annotations corrected to match.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| §3.10 step 1's "<= 4 characters" extension lookback has no unit (L3 MAJOR)                                                                                                                                                                                       | **MODIFIED**             | **[verified here]** The reviewer guessed codepoints. It is **bytes**: `src/clean_string.c:284-294` in `0a8e212` does `while (--input_walk > filename) { if (extension - input_walk > 5) break; ... }` — pointer arithmetic over `char *`. Stated as "<= 4 bytes of UTF-8" with the source line and the note that for the ASCII segments this rule targets (`.tar`, `.tar.gz`) bytes and codepoints agree, so the choice only shows up on inputs the rule was never aimed at.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| §3.10 step 3's whole-name fallback does not restate grapheme safety (L3 MAJOR)                                                                                                                                                                                   | **ACCEPTED**             | Step 3 now says "same grapheme-cluster boundary algorithm as step 2, just with no extension split", and names the temptation it is closing off (`is_char_boundary`). §8.1's No-grapheme-splitting row says the property is not waived on that path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `rename_case_only` is misleadingly named; §6.2 also routes NFD->NFC through it (L3 MINOR)                                                                                                                                                                        | **MODIFIED**             | Kept the name (it is referenced from §5.4, §6.2, and §8.4; renaming buys nothing a comment does not) and fixed the doc-comment at the trait definition to name both cases and, more importantly, to state _why_ the no-clobber flag must not be used on this path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| §3.12's mixed-script warning needs a UCD Script table not listed in §7.1/§7.3 (L3 MINOR)                                                                                                                                                                         | **ACCEPTED**             | `scripts.rs` added to §7.1's layout (same build-time generator as `invisible.rs`) and to §7.3's list.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| §3.2 stage 10: "leading separator" ambiguous when a preserved leading `.` comes first (L3 MINOR)                                                                                                                                                                 | **ACCEPTED**             | Stage 10's row says "including one that immediately follows a preserved leading `.`", and §3.8 gains the worked example: `.!file.txt` -> `.file.txt`, not `._file.txt`. The dot is a dotfile marker, not a shield for what follows it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| §7.2's Debian claim cited doc 07 row 8a as a live re-verification it explicitly was not (L1 MINOR)                                                                                                                                                               | **ACCEPTED**             | Hedged to doc 07's own confidence level: row 8a upholds the citation but did not re-fetch it, "medium-high confidence, not re-verified live", consistent with well-documented Debian practice and not in real doubt.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| P3 leans on #124, whose longer quote doc 05 flags as a synthesis of two comments 37 minutes apart (L1 MINOR)                                                                                                                                                     | **ACCEPTED**             | Fidelity note added to P3 pointing at doc 05 Corrections Required item 4, stating that only the short fragments quoted here are individually verbatim. The document never block-quoted the synthesized text, so this is a citation-chain courtesy, not a fabrication fix.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| §4.4's not-configurable table omits the `.git`/`.hg`/`.svn` skip (L2 MINOR)                                                                                                                                                                                      | **ACCEPTED**             | Row added, with the #110 `--git`-rejection reason.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| No statement that xattrs, ACLs, ownership, and mode survive a rename (L2 MINOR)                                                                                                                                                                                  | **ACCEPTED**             | One paragraph in §5.2: everything attached to the inode is untouched by construction, and it is a `rename(2)`-level guarantee rather than something we implement. Stated so an auditor need not derive it from POSIX.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| No statement on i18n of detoxrs's own messages (L2 MINOR)                                                                                                                                                                                                        | **ACCEPTED**             | §9.4: English-only like upstream (doc 13 §3, §8), not revisited for v1.0, with the reason it is worth stating (§8.3 pins `--help` as a snapshot contract).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Snap neither adopted nor declined, though detox ships one (L2 MINOR)                                                                                                                                                                                             | **ACCEPTED**             | Declined explicitly in §9.4 with the doc 13 §5.1 precedent as the reason: a `devmode` snap is a tarball with extra steps, and a strictly confined one could not do this tool's job.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `.tbl` locale-conditional filter blocks never discussed as a dropped capability (L2 coverage gap)                                                                                                                                                                | **ACCEPTED**             | §9.2 migration bullet: `detoxrs` has no locale-conditional behavior anywhere, same output under every locale, and the reason it is a deliberate drop — a rename whose result depends on the ambient environment cannot be previewed honestly.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| No `detoxrs` analogue for detox's `-L -v` (dump the resolved config) (L2 coverage gap)                                                                                                                                                                           | **ACCEPTED**             | `--print-config` added to `--help`, justified in §4.3 (four-layer precedence makes "which of these set this value" a real question, and profiles plus rules make the dump _more_ useful than for detox's sequences, not less), and slotted into v0.2 in §10.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| detox's `-r` quirk (first-level children processed with or without `-r`) not noted for migrators (L2 coverage gap)                                                                                                                                               | **ACCEPTED**             | §9.2 migration bullet states detox's behavior (doc 10) and that `detoxrs` deliberately does not copy it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| L2's remaining coverage rows judged "moot", "adequate", or "acceptable omission" by the reviewer itself (duplicate-sequence merge semantics, `\uXXXX` escapes, `configure.ac` options, `DETOX_SEQUENCE`, `max_length <= 0` coercion, overlong UTF-8, `-?` alias) | **REJECTED** as findings | No action needed and none taken. Each is either mooted by a rejected mechanism (sequences, `.tbl` files) or already covered by an existing statement (§4.3's environment-variable sentence, §3.7's delete class, Rust's own UTF-8 validation). Documenting a non-difference would add length without adding information.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+
+Counts: **31 accepted, 7 modified, 2 rejected** (plus one block of reviewer-acknowledged non-findings
+rejected as a group).
+
+The three findings flagged as most serious were each verified against primary source before acting,
+and each produced a different kind of change: the archival was a **fact** to correct, #23 was an
+**argument** to rebuild while keeping the policy, and stage 13's fallback was a genuine **design
+contradiction** that needed a new decision (§3.14) plus one honest open question (§11.11) about the
+part the decision does not settle.
