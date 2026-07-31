@@ -1,0 +1,258 @@
+# Release automation (release-please), per docs/rust-setup-release.md.
+#
+# Safety model, read before touching this file:
+#   - This workflow runs on every push to `main`, but the ONLY thing that
+#     happens on a plain push is `release-please` updating (or opening) its
+#     standing release PR. That PR is the accountable human approval gate:
+#     nothing tags, builds, or publishes anything until a human reviews and
+#     merges it.
+#   - Every job after `release-please` is gated on
+#     `needs.release-please.outputs.release_created == 'true'`, which is only
+#     true on the single push event produced by merging that release PR. A
+#     normal feature-branch merge to `main` never sets it.
+#   - The `release-please` job itself is additionally scoped to this repo
+#     (`github.repository == 'hatchertechnology/detoxrs'`) so a fork can't
+#     spend its App token/credentials by accident.
+#   - `build`/`checksums`/`provenance` run under the `release` GitHub
+#     Environment. That environment does NOT exist yet — it must be created
+#     by a repo admin (Settings -> Environments) with required reviewers
+#     before this workflow can do anything beyond the release-please PR
+#     bookkeeping. See docs/rust-setup-release.md "Deferred / needs a human".
+#   - There is no `cargo publish` job. See docs/rust-setup-release.md for why
+#     (the binary is the product; crates.io publish is deliberately deferred,
+#     see proposal 00 section 9.4 and 7.1).
+#
+# UNEXECUTED: this workflow has not been run. It cannot be validated without
+# a real push to `main` in this repo (or a fork with its own App token
+# secrets). See docs/rust-setup-release.md "Verification" for what a human
+# must do before trusting it for a real release.
+
+name: release
+
+on:
+  push:
+    branches: [main]
+
+# Default: read-only. Each job below declares only the extra permissions it
+# needs.
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    name: release-please
+    # Guard against forks spending this repo's App-token secrets.
+    if: github.repository == 'hatchertechnology/detoxrs'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      # A GitHub App token is required (not the default GITHUB_TOKEN) so
+      # that a tag pushed by this job can itself trigger the `build` job
+      # below -- see docs/rust-setup-release.md "Why a GitHub App token".
+      # secrets.RELEASE_APP_ID / secrets.RELEASE_APP_PRIVATE_KEY do not exist
+      # yet; a human must create the App and add these secrets before this
+      # step will run. Until then this job fails closed (no token = no
+      # release-please run = no release), which is the safe failure mode.
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0 (2025-03-27)
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: release-please
+        id: rp
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0 (2026-04-22)
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  build:
+    name: build (${{ matrix.target }})
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    environment: release
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Tier 1 per proposal 00 section 6.4: gnu-linux, native runners.
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            cross: false
+            archive_ext: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            cross: false
+            archive_ext: tar.gz
+          # musl-linux (proposal 00 section 9.4's packaging list): no native
+          # musl cross-toolchain on the stock runner image, so these build
+          # via `cross` (Docker-based) instead of bare `cargo`. UNVERIFIED --
+          # see docs/rust-setup-release.md "Targets" for the specific risk
+          # (cargo-auditable's interaction with `cross` has not been tested).
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            cross: true
+            archive_ext: tar.gz
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-latest
+            cross: true
+            archive_ext: tar.gz
+          # macOS, tier 1 per proposal 00 section 6.4. macos-14 is Apple
+          # Silicon; x86_64-apple-darwin cross-compiles natively from it
+          # (same Xcode toolchain supports both Apple archs).
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            cross: false
+            archive_ext: tar.gz
+          - target: x86_64-apple-darwin
+            runner: macos-14
+            cross: false
+            archive_ext: tar.gz
+          # Windows: best-effort tier only per proposal 00 section 6.4 (not
+          # tier 1). x86_64 only -- aarch64-pc-windows-msvc is excluded: it
+          # is in neither the proposal's platform tiers nor its packaging
+          # list, and would be new, unrequested scope.
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            cross: false
+            archive_ext: zip
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2 (pinned via v4 tag, resolved 2026-07-31)
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Sync Cargo.lock to the version release-please just bumped
+        run: cargo update --workspace --locked
+
+      - run: rustup target add ${{ matrix.target }}
+        if: ${{ !matrix.cross }}
+        shell: bash
+
+      - name: Install cross
+        if: matrix.cross
+        uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2 (resolved 2026-07-31)
+        with:
+          tool: cross
+
+      - name: Install cargo-auditable
+        # UNVERIFIED under `cross` -- native targets only for now. See
+        # docs/rust-setup-release.md.
+        if: ${{ !matrix.cross }}
+        uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2 (resolved 2026-07-31)
+        with:
+          tool: cargo-auditable
+
+      - name: Build (native, embedding dependency tree)
+        if: ${{ !matrix.cross }}
+        run: cargo auditable build --release --locked --target ${{ matrix.target }} -p detoxrs
+        shell: bash
+
+      - name: Build (cross, musl)
+        if: matrix.cross
+        run: cross build --release --locked --target ${{ matrix.target }} -p detoxrs
+        shell: bash
+
+      - name: Package archive (Unix)
+        if: matrix.archive_ext == 'tar.gz'
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_NAME#v}"
+          STAGE="detoxrs-${VERSION}-${TARGET}"
+          mkdir -p "$STAGE"
+          cp "target/${TARGET}/release/detoxrs" "$STAGE/"
+          cp README.md LICENSE "$STAGE/"
+          tar -czf "${STAGE}.tar.gz" "$STAGE"
+        shell: bash
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+          TARGET: ${{ matrix.target }}
+
+      - name: Package archive (Windows)
+        if: matrix.archive_ext == 'zip'
+        run: |
+          $VERSION = "${env:TAG_NAME}".TrimStart("v")
+          $STAGE = "detoxrs-$VERSION-${env:TARGET}"
+          New-Item -ItemType Directory -Path $STAGE | Out-Null
+          Copy-Item "target/${env:TARGET}/release/detoxrs.exe" -Destination $STAGE
+          Copy-Item README.md,LICENSE -Destination $STAGE
+          Compress-Archive -Path $STAGE -DestinationPath "$STAGE.zip"
+        shell: pwsh
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+          TARGET: ${{ matrix.target }}
+
+      - name: Upload archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (pinned via v4 tag, resolved 2026-07-31)
+        with:
+          name: detoxrs-${{ matrix.target }}
+          path: detoxrs-*.${{ matrix.archive_ext }}
+          if-no-files-found: error
+
+  checksums-and-provenance:
+    name: checksums, SBOM, and provenance
+    needs: [release-please, build]
+    if: needs.release-please.outputs.release_created == 'true'
+    environment: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2 (pinned via v4 tag, resolved 2026-07-31)
+
+      - name: Download all built archives
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0 (pinned via v4 tag, resolved 2026-07-31)
+        with:
+          pattern: detoxrs-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum detoxrs-* > SHA256SUMS
+
+      # TODO(agent C, SBOM work): download the CycloneDX SBOM artifact that
+      # agent C's workflow produces and copy it into dist/ here, e.g.:
+      #
+      #   - name: Download SBOM
+      #     uses: actions/download-artifact@<pin>
+      #     with:
+      #       name: <agent C's artifact name>
+      #       path: dist
+      #
+      # Needed from agent C, precisely:
+      #   1. A CycloneDX JSON SBOM generated with `cargo cyclonedx --format
+      #      json --describe binaries` (or equivalent) against the release
+      #      build's Cargo.lock/features -- not a dev-dependency-inclusive
+      #      report.
+      #   2. Produced as a workflow artifact (or a step this job can call)
+      #      with a stable, documented artifact name.
+      #   3. One SBOM per target, or one SBOM covering the whole release --
+      #      agent C should say which, and this job's copy step (and the
+      #      user-facing docs) will name it accordingly.
+      # See docs/rust-setup-release.md "What I need from agent C".
+
+      - name: Attest build provenance for every release archive
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0 (pinned via v2 tag, resolved 2026-07-31)
+        with:
+          subject-path: dist/detoxrs-*.tar.gz,dist/detoxrs-*.zip
+
+      - name: Upload checksums and archives to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ needs.release-please.outputs.tag_name }}" \
+            dist/SHA256SUMS dist/detoxrs-*.tar.gz dist/detoxrs-*.zip \
+            --clobber

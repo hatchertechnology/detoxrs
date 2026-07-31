@@ -1,0 +1,15 @@
+# CODEOWNERS
+#
+# This project does not yet have a published maintainer roster (see
+# docs/rust-setup-governance.md) or CODEOWNER-eligible areas beyond the
+# repository owner -- governance.md recommends naming reviewers for
+# release workflows, dependency policy, unsafe/FFI, and the security
+# policy itself, but there is no one to name for those roles yet beyond
+# the account that owns this repository. Until a maintainer team exists,
+# route every path to the repository owner rather than fabricate named
+# reviewers for areas that don't have one.
+#
+# Last matching pattern takes precedence; keep this file a single
+# catch-all until real per-area ownership exists.
+
+* @hatchertechnology

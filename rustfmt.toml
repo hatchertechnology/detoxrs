@@ -1,0 +1,4 @@
+# Edition is normally picked up per-crate from Cargo.toml automatically;
+# pinned here too so `cargo fmt` behaves identically even if invoked outside
+# a crate directory (e.g. against a single loose file).
+edition = "2024"

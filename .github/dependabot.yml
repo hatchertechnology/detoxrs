@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # Cargo dependencies (Cargo.toml/Cargo.lock). No non-dev dependencies exist
+  # yet (see docs/rust-setup-notes.md), but this costs nothing to configure
+  # now and will matter the moment one lands.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # GitHub Actions versions, including the commit-SHA-pinned actions in
+  # .github/workflows/ci.yml (Dependabot understands SHA pins and opens PRs
+  # that bump both the SHA and its version comment).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

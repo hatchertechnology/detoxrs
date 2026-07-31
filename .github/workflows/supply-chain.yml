@@ -1,0 +1,41 @@
+name: Supply Chain
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --- vet: cargo-vet audit-trust policy enforcement. Separate workflow
+  # from security.yml per wiki/rust/ideal-project-setup/ci-cd.md ("vet ...
+  # Separate from the security job because it has different tooling and
+  # different failure modes").
+  #
+  # STATUS: the workspace has zero non-dev dependencies (see
+  # docs/rust-setup-notes.md), so `cargo vet check` passes vacuously --
+  # there is nothing in the tree to audit or exempt. See
+  # supply-chain/config.toml and docs/rust-setup-supply-chain.md for why
+  # this is set up minimally rather than with fabricated exemptions.
+  vet:
+    name: vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+      - uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
+        with:
+          tool: cargo-vet
+      - run: cargo vet check

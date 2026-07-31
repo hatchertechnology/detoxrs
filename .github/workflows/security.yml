@@ -1,0 +1,65 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, independent of any commit: a RustSec advisory can be published
+    # against a dependency already in Cargo.lock with nothing else changing.
+    # See wiki/rust/ideal-project-setup/ci-cd.md "Evidence retention and
+    # scheduled checks" and docs/rust-setup-supply-chain.md.
+    - cron: "0 6 * * 1"
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --- security: RustSec advisories (cargo-audit), license/ban/source policy
+  # (cargo-deny), filesystem vuln + secret scanning (Trivy), and an
+  # informational unsafe-code report (cargo-geiger). Matches
+  # wiki/rust/ideal-project-setup/security-scanning.md and supply-chain.md's
+  # "putting it together" job shape.
+  #
+  # STATUS: the workspace has zero non-dev dependencies today (see
+  # docs/rust-setup-notes.md), so cargo-audit and cargo-deny's advisory/
+  # license checks are trivially clean and cargo-geiger reports zero unsafe
+  # everywhere. A green run here proves the tooling is wired correctly, not
+  # that any dependency is safe -- there is nothing to be unsafe yet.
+  security:
+    name: security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+      - uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
+        with:
+          tool: cargo-audit,cargo-deny,cargo-geiger
+      # RustSec advisory-db lookup against Cargo.lock. Config: .cargo/audit.toml.
+      - run: cargo audit
+      # License / bans / sources / advisories policy. Config: deny.toml.
+      - run: cargo deny check
+      # Filesystem vulnerability + secret scan. No container image and no
+      # target-language lockfile dependencies beyond Cargo.lock exist yet,
+      # so this mostly scans Cargo.lock (currently dependency-free) and the
+      # repo tree for accidentally committed secrets -- the secret scanner
+      # is the part with real teeth today.
+      - run: trivy fs --scanners vuln,secret --exit-code 1 --skip-dirs target .
+      # Informational only, per security-scanning.md: cargo-geiger's exit
+      # code can be nonzero for reasons unrelated to actual `unsafe` findings,
+      # so this step must never gate the build. `#![forbid(unsafe_code)]` in
+      # detoxrs-core and `#![deny(unsafe_code)]` in detoxrs are the actual
+      # enforcement; geiger is trend-tracking once dependencies exist.
+      # `-p detoxrs` is required: the workspace root is a virtual manifest
+      # and cargo-geiger refuses to run against it directly.
+      - run: cargo geiger -p detoxrs || true

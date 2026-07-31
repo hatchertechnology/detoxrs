@@ -1,0 +1,17 @@
+[package]
+name = "detoxrs"
+description = "Make filenames sane: unix-safe, portable, readable. Preview by default."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+detoxrs-core = { path = "../detoxrs-core", version = "0.1.0" }

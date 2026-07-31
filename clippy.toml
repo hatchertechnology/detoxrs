@@ -1,0 +1,4 @@
+# Tells clippy about our declared MSRV (Cargo.toml `rust-version`) so
+# pedantic/nursery lints don't suggest APIs or idioms stabilized after it.
+# Keep this in sync with `[workspace.package] rust-version` in Cargo.toml.
+msrv = "1.93.0"

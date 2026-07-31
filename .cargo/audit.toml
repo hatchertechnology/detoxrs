@@ -1,0 +1,18 @@
+# cargo-audit configuration.
+#
+# Reference: wiki/rust/ideal-project-setup/supply-chain.md, "cargo-audit:
+# RustSec advisory database". Run with `cargo audit`.
+#
+# STATUS: the workspace has zero non-dev dependencies (see
+# docs/rust-setup-notes.md), so this file exists to hold the policy in
+# place, not because anything has needed an exception yet.
+
+[advisories]
+# Advisory IDs to ignore. Add an entry only with a comment naming the
+# advisory, why it does not apply (e.g. unreachable code path, no fix
+# available yet), the owner who accepted the risk, and a re-review date.
+ignore = []
+
+[output]
+deny = ["warnings"]
+quiet = false

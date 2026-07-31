@@ -1,0 +1,9 @@
+[toolchain]
+# The toolchain developers and CI's default jobs build with day-to-day. This
+# is intentionally the latest verified-working stable, NOT the MSRV: the MSRV
+# (Cargo.toml `[workspace.package] rust-version`, currently 1.93.0) is
+# enforced separately by `just msrv`, which builds with that exact toolchain
+# via rustup. Bump this file whenever a new stable is installed and verified;
+# see docs/rust-setup-notes.md.
+channel = "1.96.1"
+components = ["rustfmt", "clippy"]

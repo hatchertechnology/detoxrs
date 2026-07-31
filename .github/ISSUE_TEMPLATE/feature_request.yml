@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest a new flag, transform, or behavior.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the filenames or workflow that don't work well today, not just the flag you imagine.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What would `detoxrs` do differently? Include an example filename before/after if relevant.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Can this already be done with `[[rule]]`, `--keep`/`--strip`, or another existing flag? See `docs/research/00-proposal-rust-detox-successor.md` for the current design and what's deliberately out of scope.

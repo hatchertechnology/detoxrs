@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # MSRV declared in Cargo.toml's [workspace.package] rust-version and
+  # mirrored in clippy.toml. Keep this in sync with both (see
+  # docs/rust-setup-ci.md and docs/rust-setup-notes.md).
+  MSRV: "1.93.0"
+
+# Default every job to read-only. This workflow neither publishes nor
+# releases anything, so no job needs elevated permissions.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same branch/PR so pushes don't queue behind
+# stale CI runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --- test: native build + test on every tier-1 OS/arch GitHub-hosted
+  # runners give us natively (no emulation, no cross toolchain). Proposal
+  # §6.4 tier 1 is Linux x86_64/aarch64 (gnu+musl) and macOS x86_64/aarch64.
+  # `ubuntu-latest` covers Linux x86_64 gnu; `macos-15-intel` and
+  # `macos-latest` cover macOS x86_64 and aarch64 respectively (GitHub has
+  # since retired the `macos-13` x86_64 image; `macos-15-intel` is the
+  # current Intel label, and macos-14/latest is aarch64-only).
+  # Linux aarch64 and both musl targets can't run tests here without
+  # emulation, so they get build-only verification in the cross-build job
+  # below instead.
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+      - run: cargo build --workspace --locked
+      - run: cargo test --workspace --locked
+
+  # --- test-windows: best-effort per proposal §6.4 (Windows is not tier 1;
+  # the reserved-name behavior it would need to assert is contested, per
+  # §6.5). Kept as its own job, not folded into the `test` matrix, so a
+  # Windows-only failure never blocks or red-flags the tier-1 matrix, and
+  # `continue-on-error` keeps it advisory rather than gating.
+  test-windows:
+    name: test (windows-latest, best-effort)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+      - run: cargo build --workspace --locked
+      - run: cargo test --workspace --locked
+
+  # --- cross-build: build-only (no test execution) verification for the
+  # remaining proposal §6.4 tier-1 targets that GitHub-hosted x86_64 runners
+  # can't natively execute: Linux aarch64 (gnu) and Linux x86_64 (musl).
+  # aarch64-unknown-linux-musl is deliberately NOT included here: it needs a
+  # musl cross C toolchain that isn't a simple `apt-get install` package (the
+  # gnu cross target only needs `gcc-aarch64-linux-gnu`; musl cross needs a
+  # prebuilt musl-cross toolchain or the `cross`/`cargo-zigbuild` tooling).
+  # See docs/rust-setup-ci.md for what's deferred and why.
+  cross-build:
+    name: cross-build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-unknown-linux-gnu, x86_64-unknown-linux-musl]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+        with:
+          key: ${{ matrix.target }}
+      - name: Install cross toolchain (aarch64-gnu)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+      - name: Install musl toolchain (x86_64-musl)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --workspace --locked --target ${{ matrix.target }}
+
+  # --- lint: formatting and clippy, platform-independent so Ubuntu-only.
+  # Uses `cargo fmt --check` directly rather than `just fmt-check`: the
+  # existing justfile recipe also runs `npx prettier --check` over all
+  # Markdown in the repo, which is a repo-wide docs-formatting concern, not
+  # the Rust lint gate this job exists to enforce (and would make this job's
+  # pass/fail depend on unrelated Markdown files it doesn't own). See
+  # docs/rust-setup-ci.md.
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  # --- msrv: enforce the declared MSRV (1.93.0). Reuses `just msrv`
+  # (`cargo +1.93.0 build --workspace --locked`) for the build check, then
+  # additionally runs the full test suite on the same pinned toolchain per
+  # msrv.md's guidance ("run the full test suite, not just cargo check" --
+  # a feature that compiles on stable may behave differently on an older
+  # toolchain). `just msrv` itself only builds, so the test step is a plain
+  # cargo invocation rather than a recipe call.
+  msrv:
+    name: msrv (1.93.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: "1.93.0"
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+      - uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
+        with:
+          tool: just
+      - run: just msrv
+      - run: cargo +1.93.0 test --workspace --locked

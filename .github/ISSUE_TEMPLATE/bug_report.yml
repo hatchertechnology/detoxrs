@@ -1,0 +1,100 @@
+name: Bug report
+description: Something renamed wrong, didn't rename, or crashed.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. `detoxrs`'s whole job is handling filenames
+        correctly, including weird ones, so the exact bytes of the filename
+        involved matter more here than in most tools -- please don't
+        paraphrase it.
+
+  - type: input
+    id: version
+    attributes:
+      label: detoxrs version
+      description: Output of `detoxrs --version`, or the commit SHA if built from source.
+      placeholder: "0.1.0 (or commit abc1234)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Other (describe in "Additional context")
+    validations:
+      required: true
+
+  - type: input
+    id: filesystem
+    attributes:
+      label: Filesystem
+      description: e.g. APFS, ext4, Btrfs, NTFS, exFAT. Run `df -T <path>` (Linux) or `diskutil info <path>` (macOS) if unsure.
+      placeholder: "APFS"
+    validations:
+      required: true
+
+  - type: input
+    id: command
+    attributes:
+      label: Exact command line, including flags
+      description: The full invocation, verbatim. Include `--dry-run`/preview flags if you used them.
+      placeholder: "detoxrs -r --on-collision number ./Downloads"
+    validations:
+      required: true
+
+  - type: textarea
+    id: filename
+    attributes:
+      label: The exact filename that misbehaved
+      description: |
+        Paste the filename in a copy-pasteable, escaped form so the report
+        survives copy-paste even if the name contains control, bidi, or
+        invisible characters. Run one of:
+
+        - `printf '%q\n' "the-filename"` (bash/zsh)
+        - `ls -b` on the containing directory to get C-style escapes
+        - `xxd` or `hexdump -C` on the raw bytes if the name may not be valid UTF-8
+
+        Paste the raw output below, not a retyped approximation.
+      placeholder: |
+        $ printf '%q\n' "$(ls -A | sed -n '3p')"
+        $'Mario​_‮Luigi.MKV'
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What actually happened
+      description: Include the full terminal output if `detoxrs` printed anything, and note whether any file was renamed, overwritten, or lost.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: dataloss
+    attributes:
+      label: Impact
+      options:
+        - label: A file was overwritten, deleted, or otherwise lost (not just misnamed).
+        - label: This looks like it might be exploitable (e.g. wrote outside the target directory, followed a symlink it shouldn't have). If checked, please report privately via [Security Advisories](https://github.com/hatchertechnology/detoxrs/security/advisories/new) instead of this form.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else -- a config file in use, whether the directory was large, whether symlinks/hardlinks were involved, etc.

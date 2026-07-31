@@ -1,0 +1,89 @@
+# cargo-deny policy for detoxrs.
+#
+# Reference: wiki/rust/ideal-project-setup/supply-chain.md. Run with
+# `cargo deny check` (all four checks) or `cargo deny check <advisories|licenses|bans|sources>`.
+#
+# STATUS AS OF THIS WRITING: the workspace has zero non-dev dependencies
+# (crates/detoxrs-core and crates/detoxrs depend on nothing but each other;
+# see docs/rust-setup-notes.md). Every check below is trivially clean today
+# because there is nothing to check — a green `cargo deny check` right now
+# proves the policy file parses and the tool runs, not that any dependency is
+# safe. This file exists so the policy is already in force the day the first
+# `cargo add` lands (proposal doc 00 §7.2's ~11-crate direct-dependency plan:
+# clap, serde, toml, serde_json, unicode-normalization, unicode-segmentation,
+# regex, walkdir, libc, deunicode, maybe terminal_size).
+
+[graph]
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+# `cargo deny check advisories` -- RustSec vulnerability/yanked-crate database
+# (backs cargo-audit's data too). No ignores yet; add an entry only with a
+# dated comment naming the advisory ID and why it's accepted (e.g. no fix
+# available, not reachable from our code path) and a re-review date.
+[advisories]
+ignore = []
+
+# `cargo deny check licenses` -- only these licenses may appear anywhere in
+# the dependency tree (including transitively). Every entry has a reason:
+[licenses]
+allow = [
+  # This project's own license (see /LICENSE). Must be allowed or cargo-deny
+  # would flag detoxrs-core and detoxrs themselves.
+  "BSD-3-Clause",
+  # The two licenses the house style guide (wiki/rust/ideal-project-setup)
+  # recommends as the Rust-ecosystem convention. Allowed for dependencies
+  # even though the *project's own* license is BSD-3-Clause instead of
+  # dual MIT/Apache-2.0 -- that mismatch is a separate, unresolved policy
+  # question (see docs/rust-setup-notes.md and docs/rust-setup-supply-chain.md),
+  # not a reason to reject upstream crates that use the ecosystem-standard
+  # dual license.
+  "MIT",
+  "Apache-2.0",
+  # Unicode data/table crates (e.g. unicode-normalization, unicode-ident,
+  # unicode-width -- all likely transitive dependents once
+  # unicode-normalization/unicode-segmentation are added per proposal §7.2)
+  # ship under this license for their generated tables.
+  "Unicode-3.0",
+  # Common permissive licenses that show up throughout the crates.io
+  # ecosystem (e.g. via syn/quote/proc-macro2 chains pulled in by clap's
+  # derive feature, or dual/triple-licensed crates offering a choice).
+  # Functionally equivalent to MIT for our purposes: attribution-only,
+  # no copyleft, no patent surprises beyond what Apache-2.0 already grants.
+  "BSD-2-Clause",
+  "ISC",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = false
+
+# `cargo deny check bans` -- duplicate/banned/wildcard-version crates.
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow-workspace = false
+# Deliberately no `deny` list yet -- there are no dependencies to have
+# opinions about. Add banned crates here as they come up (e.g. a crate
+# rejected in proposal §7.2's "explicitly rejected" table, if someone tries
+# to reintroduce it transitively).
+deny = []
+
+# `cargo deny check sources` -- only allow crates.io. No git dependencies,
+# no private registries; this project has no reason to pull code any other
+# way.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []
