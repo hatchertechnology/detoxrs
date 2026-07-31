@@ -10,6 +10,7 @@ This is a factual capture for a Rust reimplementation; it makes no design
 recommendations.
 
 Local paths used:
+
 - Binary: `/opt/homebrew/bin/detox`, `/opt/homebrew/bin/inline-detox`
 - Shipped config: `/opt/homebrew/etc/detoxrc` (== `/opt/homebrew/Cellar/detox/3.0.1/etc/detoxrc`)
 - Shipped tables: `/opt/homebrew/share/detox/{safe,iso8859_1,cp1252,unicode}.tbl`
@@ -28,20 +29,21 @@ usage: detox [-hLnrvV] [-f configfile] [-s sequence] [--dry-run] [--help]
              [--inline] [--recursive] [--special] [--verbose] file [file ...]
 ```
 
-| Flag | Long form | Effect (verified in source / behavior) |
-|---|---|---|
-| `-f configfile` | — | Use exactly this config file for sequence definitions; **no other config file is parsed** (man: "No other config file will be parsed"). |
-| `-h` | `--help` | Print usage + option summary, exit 0. |
-| `-L` | — | List available sequences and exit. Plain `-L` lists sequence names + source file only. `-L -v` additionally dumps every filter in each sequence and its options (builtin table name, `remove_trailing`, etc.). Does not touch any files. |
-| `-n` | `--dry-run` | Dry run. **Implies verbose output** (prints `old -> new` lines) but performs no `rename()`. Collision/clobber detection still runs during a dry run (see §5) — a `-n` run can print "Cannot rename ... file already exists" without changing anything. |
-| `-r` | `--recursive` | Descend into subdirectories. Dotfiles/dot-directories are skipped during the recursive walk unless *explicitly* named on the command line (see §6). Sequence: a directory is itself renamed first via `parse_file()`, then its (possibly new) path is recursed into (`src/filelist.c: parse_dir`). |
-| `-s sequence` | — | Select a sequence by name defined in the config file(s). Overridden precedence: CLI `-s` > `DETOX_SEQUENCE` env var > `default` sequence > (if no sequence literally named `default` exists) the first sequence defined (`src/sequence.c: sequence_choose_default`). |
-| — | `--special` | Operate on symlinks and other non-regular files (device nodes, FIFOs, sockets). **Without this flag, detox silently skips any file argument that is not a regular file or a directory — including symlinks passed directly on the command line**, not just during recursion (verified: `src/detox.c` main loop only calls `parse_file`/`parse_dir` for `S_ISDIR`/`S_ISREG`, or falls through to `parse_file` if `options->special` is set). Even with `--special`, detox will **not recurse into a symlink that points at a directory** (man page, and `parse_dir` only recurses paths for which `lstat` says `S_ISDIR`, which a symlink-to-dir is not under `lstat`). |
-| `-v` | `--verbose` | Print `old -> new` for every rename that happens (or would happen, under `-n`). Repeatable (`main_options->verbose++`) but no observed behavior difference between `-v` and `-vv` in this version. |
-| `-V` | — | Print `PACKAGE_STRING` (e.g. `detox 3.0.1`) and exit 0. |
-| — | `--inline` | Switch to inline mode even when invoked as `detox` (normally inline mode is auto-selected when the binary's `basename` is exactly `inline-detox`). See §"inline mode" below. |
+| Flag            | Long form     | Effect (verified in source / behavior)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-f configfile` | —             | Use exactly this config file for sequence definitions; **no other config file is parsed** (man: "No other config file will be parsed").                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `-h`            | `--help`      | Print usage + option summary, exit 0.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `-L`            | —             | List available sequences and exit. Plain `-L` lists sequence names + source file only. `-L -v` additionally dumps every filter in each sequence and its options (builtin table name, `remove_trailing`, etc.). Does not touch any files.                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `-n`            | `--dry-run`   | Dry run. **Implies verbose output** (prints `old -> new` lines) but performs no `rename()`. Collision/clobber detection still runs during a dry run (see §5) — a `-n` run can print "Cannot rename ... file already exists" without changing anything.                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `-r`            | `--recursive` | Descend into subdirectories. Dotfiles/dot-directories are skipped during the recursive walk unless _explicitly_ named on the command line (see §6). Sequence: a directory is itself renamed first via `parse_file()`, then its (possibly new) path is recursed into (`src/filelist.c: parse_dir`).                                                                                                                                                                                                                                                                                                                                                                     |
+| `-s sequence`   | —             | Select a sequence by name defined in the config file(s). Overridden precedence: CLI `-s` > `DETOX_SEQUENCE` env var > `default` sequence > (if no sequence literally named `default` exists) the first sequence defined (`src/sequence.c: sequence_choose_default`).                                                                                                                                                                                                                                                                                                                                                                                                   |
+| —               | `--special`   | Operate on symlinks and other non-regular files (device nodes, FIFOs, sockets). **Without this flag, detox silently skips any file argument that is not a regular file or a directory — including symlinks passed directly on the command line**, not just during recursion (verified: `src/detox.c` main loop only calls `parse_file`/`parse_dir` for `S_ISDIR`/`S_ISREG`, or falls through to `parse_file` if `options->special` is set). Even with `--special`, detox will **not recurse into a symlink that points at a directory** (man page, and `parse_dir` only recurses paths for which `lstat` says `S_ISDIR`, which a symlink-to-dir is not under `lstat`). |
+| `-v`            | `--verbose`   | Print `old -> new` for every rename that happens (or would happen, under `-n`). Repeatable (`main_options->verbose++`) but no observed behavior difference between `-v` and `-vv` in this version.                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `-V`            | —             | Print `PACKAGE_STRING` (e.g. `detox 3.0.1`) and exit 0.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| —               | `--inline`    | Switch to inline mode even when invoked as `detox` (normally inline mode is auto-selected when the binary's `basename` is exactly `inline-detox`). See §"inline mode" below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 Environment variable: **`DETOX_SEQUENCE`** — sets the default sequence name, same precedence as above (read once at startup via `getenv`, overridden by `-s`). Verified:
+
 ```
 $ DETOX_SEQUENCE=lower detox -n -v "UPPER_CASE_FILE.TXT"
 UPPER_CASE_FILE.TXT -> upper_case_file.txt
@@ -49,9 +51,10 @@ UPPER_CASE_FILE.TXT -> upper_case_file.txt
 
 **Argument handling**: if no files are given, prints usage and exits with failure (non-inline mode only — inline mode with no filenames reads stdin).
 
-**Inline mode** (`--inline`, or binary named `inline-detox`): reads text (a filename per line, or stdin) and rewrites just the *filename text*, not the actual filesystem entry — no `rename()`, no filesystem stat calls for existence, no collision detection. Useful for piping filenames through the same cleaning logic. `src/file.c: parse_inline()` handles UTF-8-aware line-buffering so a multi-byte UTF-8 character isn't split across an internal buffer boundary. `inline-detox` supports `-f`, `-h`, `-L`, `-s`, `-v`, `-V` but not `-r`/`--recursive`/`--special`/`-n` (recursion, dry-run, and special-file handling are meaningless for a text stream).
+**Inline mode** (`--inline`, or binary named `inline-detox`): reads text (a filename per line, or stdin) and rewrites just the _filename text_, not the actual filesystem entry — no `rename()`, no filesystem stat calls for existence, no collision detection. Useful for piping filenames through the same cleaning logic. `src/file.c: parse_inline()` handles UTF-8-aware line-buffering so a multi-byte UTF-8 character isn't split across an internal buffer boundary. `inline-detox` supports `-f`, `-h`, `-L`, `-s`, `-v`, `-V` but not `-r`/`--recursive`/`--special`/`-n` (recursion, dry-run, and special-file handling are meaningless for a text stream).
 
 Verified:
+
 ```
 $ echo "some file name.txt and another (one).doc" | inline-detox
 some_file_name.txt_and_another-one.doc
@@ -81,11 +84,11 @@ ignore { filename "name"; ... };
 # comment
 ```
 
-- `sequence default { ... };` — the sequence named exactly `default` is used when no `-s`/`DETOX_SEQUENCE` is given. If none is named `default`, the *first* sequence defined in the loaded config wins as the fallback (only when the user also didn't request a sequence by name).
+- `sequence default { ... };` — the sequence named exactly `default` is used when no `-s`/`DETOX_SEQUENCE` is given. If none is named `default`, the _first_ sequence defined in the loaded config wins as the fallback (only when the user also didn't request a sequence by name).
 - Sequence names are case-sensitive and must be globally unique across all merged config files; duplicates replace earlier definitions of the same name (this is how a user overrides a shipped sequence).
 - `ignore { filename "x"; ... };` — filenames to skip during `-r` recursion (exact basename match, `strcmp`). Independent of the "dotfiles are always skipped during recursion" rule.
 
-### 2.3 Filter statements (each occurs *inside* a `sequence { }` block, and filters run **in the order listed**, each one's output feeding the next)
+### 2.3 Filter statements (each occurs _inside_ a `sequence { }` block, and filters run **in the order listed**, each one's output feeding the next)
 
 ```
 iso8859_1;
@@ -119,11 +122,12 @@ Filter semantics (all confirmed against `src/clean_string.c`, `src/clean_utf_8.c
 - **`safe`** — Walks the filename **byte by byte** (0x00–0xFF, no UTF-8 awareness at all) and replaces any byte found in the table with its replacement string; bytes not found pass through unchanged if the table has no `default`, or are replaced by the `default` string otherwise. Because it operates on raw bytes, it does **not** touch valid multi-byte UTF-8 sequences (each byte of a UTF-8-encoded accented letter or emoji has the high bit set but the shipped `safe.tbl` has no entries above 0x7F and no `default`, so such bytes pass straight through — verified with `café.txt` and an emoji filename under the default sequence: unchanged).
 - **`wipeup`** — Two independent behaviors:
   1. Strips any run of leading `-`, `_`, or `#` characters from the start of the filename (checked in that unordered set, simple `while` loop, no precedence among the three at the leading-edge).
-  2. Collapses consecutive runs of a configurable character set down to one character. The set is `-_` normally, or `.-_` when `remove_trailing` is set. **Precedence when a run mixes different chars from the set**: within a contiguous run, the filter tracks the *earliest-occurring-in-the-precedence-string* character seen so far and emits that single character once the run ends. The precedence string is `.-_` (period beats dash beats underscore) when `remove_trailing` is set, or `-_` (dash beats underscore) otherwise. Example: `this__--.txt` with `remove_trailing` collapses the `__--` run to `.` … wait, more precisely, precedence is by *position in the search string*, i.e. `.` (index 0) > `-` (index 1) > `_` (index 2).
-- **`max_length { length N; }`** — Trims the filename to at most `N` bytes (default 256 if `N<=0` or omitted). Extension-aware: it looks at the substring after the **last** `.`; if that's the whole filename (no dot) or the "extension" is a single character (i.e., just a trailing bare dot), it truncates dumbly to `N` bytes and returns. Otherwise it looks **backward up to 5 characters** from that last dot for an *earlier* dot, and if found, treats everything from that earlier dot onward as "the extension" — this is exactly the mechanism that preserves `.tar.gz` as a unit when the two dots are ≤5 characters apart (`.tar` is 4 chars). The body (everything before the extension) is then truncated so body+extension == N bytes. If the extension alone is `>= N` bytes, it prints a warning to stderr (`max_length %d is less than required file length for '%s'. giving up.`) and returns the filename **unchanged** (not truncated at all).
+  2. Collapses consecutive runs of a configurable character set down to one character. The set is `-_` normally, or `.-_` when `remove_trailing` is set. **Precedence when a run mixes different chars from the set**: within a contiguous run, the filter tracks the _earliest-occurring-in-the-precedence-string_ character seen so far and emits that single character once the run ends. The precedence string is `.-_` (period beats dash beats underscore) when `remove_trailing` is set, or `-_` (dash beats underscore) otherwise. Example: `this__--.txt` with `remove_trailing` collapses the `__--` run to `.` … wait, more precisely, precedence is by _position in the search string_, i.e. `.` (index 0) > `-` (index 1) > `_` (index 2).
+- **`max_length { length N; }`** — Trims the filename to at most `N` bytes (default 256 if `N<=0` or omitted). Extension-aware: it looks at the substring after the **last** `.`; if that's the whole filename (no dot) or the "extension" is a single character (i.e., just a trailing bare dot), it truncates dumbly to `N` bytes and returns. Otherwise it looks **backward up to 5 characters** from that last dot for an _earlier_ dot, and if found, treats everything from that earlier dot onward as "the extension" — this is exactly the mechanism that preserves `.tar.gz` as a unit when the two dots are ≤5 characters apart (`.tar` is 4 chars). The body (everything before the extension) is then truncated so body+extension == N bytes. If the extension alone is `>= N` bytes, it prints a warning to stderr (`max_length %d is less than required file length for '%s'. giving up.`) and returns the filename **unchanged** (not truncated at all).
 - **`lower`** — ASCII-only `isupper()`/`tolower()` per byte; does not affect non-ASCII bytes (including any accented Latin-1/UTF-8 byte with the high bit set, since C's `isupper()` behavior on values >127 is at minimum locale-dependent and detox does not attempt Unicode case folding here).
 
 Verified `max_length` behavior with a custom sequence (`length 20`):
+
 ```
 this_is_my_file_name.txt        -> this_is_my_file_.txt      (20 bytes; no double-ext)
 this_is_my_archive_name.tar.gz  -> this_is_my_ar.tar.gz       (20 bytes; .tar.gz kept as unit — "ar" + ".tar.gz" = 20)
@@ -147,8 +151,8 @@ end                       # the process locale's language portion matches `lang`
 - `value` may repeat across `start`/`end` blocks; a later `start`/`end` block's value for the same key **overwrites** an earlier one (`table.c: table_put` increments an `overwrites` counter on key collision and replaces the data — no error, silent).
 - A `start lang` block is only loaded if the current process locale's language code matches `lang` (e.g. `en`); otherwise its translations are ignored and the base block's values apply. This lets one table have a per-language override (man example: `$` → `_dollar_` in general, but `_money_` under English locale).
 - Internally, tables are open-addressed hash tables (`table_hash = key % table_length`) with linear-scan fallback; irrelevant to on-disk semantics but explains that key lookup is by exact Unicode code point (for `utf_8`/table-keyed-by-codepoint filters) or exact byte value (for `safe`/`iso8859_1`).
-- **Builtin tables** are compiled-in copies of the same 4 tables (`safe`, `iso8859_1`, `cp1252`, `unicode`) used when no on-disk `.tbl` file is found, or explicitly requested via `builtin "name"`. In this build the on-disk versions at `/opt/homebrew/share/detox/*.tbl` and the builtins are the same content (per `bin/generate-builtin.sh` in source, builtins are generated *from* the shipped `.tbl` files at build time).
-- **Table file search path** when *not* using `builtin`/`filename` explicitly and a filter just says e.g. `safe;` with no block: detox searches (in order) `$DATADIR/detox/<name>.tbl`, `/usr/share/detox/<name>.tbl`, `/usr/local/share/detox/<name>.tbl`, falling back to the compiled-in builtin if none of those parse (`src/filter.c: filter_find_table`/`filter_load_table`). Note: **`/opt/homebrew/...` is not in this search list** — on this Homebrew install, the on-disk tables are found via `$DATADIR` (Homebrew sets `DATADIR` to its own share dir at build time), not via a hardcoded `/opt/homebrew` path.
+- **Builtin tables** are compiled-in copies of the same 4 tables (`safe`, `iso8859_1`, `cp1252`, `unicode`) used when no on-disk `.tbl` file is found, or explicitly requested via `builtin "name"`. In this build the on-disk versions at `/opt/homebrew/share/detox/*.tbl` and the builtins are the same content (per `bin/generate-builtin.sh` in source, builtins are generated _from_ the shipped `.tbl` files at build time).
+- **Table file search path** when _not_ using `builtin`/`filename` explicitly and a filter just says e.g. `safe;` with no block: detox searches (in order) `$DATADIR/detox/<name>.tbl`, `/usr/share/detox/<name>.tbl`, `/usr/local/share/detox/<name>.tbl`, falling back to the compiled-in builtin if none of those parse (`src/filter.c: filter_find_table`/`filter_load_table`). Note: **`/opt/homebrew/...` is not in this search list** — on this Homebrew install, the on-disk tables are found via `$DATADIR` (Homebrew sets `DATADIR` to its own share dir at build time), not via a hardcoded `/opt/homebrew` path.
 
 ---
 
@@ -157,13 +161,16 @@ end                       # the process locale's language portion matches `lang`
 No `default` line (commented out in the shipped file) → **anything not explicitly listed passes through unchanged**, including all non-ASCII/multi-byte UTF-8 bytes.
 
 Mapped to `_` (underscore):
+
 - All C0 control characters `0x01`–`0x1F` and `0x7F` (DEL)
 - Space (`0x20`), `! " $ ' * / : ; < > ? @ \ ` |`
 
 Mapped to `-` (dash):
+
 - `( ) [ ] { }`
 
 Special case:
+
 - `&` → the literal string `_and_`
 
 Everything else — letters, digits, `. , + - = ^ ~ # % _`, and all bytes ≥ 0x80 — is **not** in the table and passes through unchanged by the current (v3.0.1) `safe.tbl`. (Note: `#` is not translated by the `safe` filter itself; the leading `#` stripping is done by `wipeup`, not `safe`.)
@@ -175,35 +182,38 @@ This is a deliberate v3.0 design shift documented in the man page HISTORY sectio
 ## 5. Collision / clobber behavior (verified against `src/file.c: parse_file`)
 
 Exact algorithm:
+
 1. Compute `new_filename` by running the chosen sequence's filters over the basename.
 2. If the cleaned name is byte-identical to the original, no rename is attempted (silent no-op, nothing printed even with `-v`, because the "if nothing changed" check short-circuits before any print).
 3. `lstat()` the **old** path. If that fails, abort (return original name, print nothing).
 4. `lstat()` the **new** path.
    - If the new path does **not** exist: proceed to rename.
-   - If the new path **does** exist: allow the rename to proceed **only if** the old and new paths refer to the exact same inode on the same device (`st_dev`/`st_ino` match) **and** that inode has exactly one hard link (`st_nlink == 1`). This is the case-only-rename escape hatch on case-insensitive filesystems (e.g. macOS default APFS): renaming `Foo.txt` → `foo.txt` sees the "new" name already existing because it's the *same file* under case-insensitive lookup, and detox lets that through.
+   - If the new path **does** exist: allow the rename to proceed **only if** the old and new paths refer to the exact same inode on the same device (`st_dev`/`st_ino` match) **and** that inode has exactly one hard link (`st_nlink == 1`). This is the case-only-rename escape hatch on case-insensitive filesystems (e.g. macOS default APFS): renaming `Foo.txt` → `foo.txt` sees the "new" name already existing because it's the _same file_ under case-insensitive lookup, and detox lets that through.
    - Otherwise (different file, or same file but hard-linked elsewhere) it refuses and prints to **stderr**: `Cannot rename <old> to <new>: file already exists`, and the original file is left untouched.
 5. This whole check runs even under `-n`/`--dry-run` — a dry run **will** report `Cannot rename ...: file already exists` for a genuine collision, without needing `-v`, since the "already exists" message is printed via `fprintf(stderr, ...)` unconditionally, not gated on verbose.
 6. On a real (non-dry-run) rename, `rename(2)` is called; if that itself fails (e.g. permissions), the error and `strerror()` text are printed and the original name is retained.
 
 Verified:
+
 ```
 $ ls
 COLLIDE FILE.txt   collide_file.txt
 $ detox -n -v *
 Cannot rename COLLIDE FILE.txt to COLLIDE_FILE.txt: file already exists
 ```
+
 (`COLLIDE_FILE.txt` collides case-insensitively with the pre-existing `collide_file.txt` on this APFS volume; they are different inodes, so detox refuses.)
 
-Caveat also stated verbatim in `man detox`: *"If, after the translation of a filename is finished, a file already exists with that same name, detox will not rename the file."* — this documents the design (never overwrite), but the source shows the one same-inode/single-link exception above that the man page prose doesn't call out explicitly.
+Caveat also stated verbatim in `man detox`: _"If, after the translation of a filename is finished, a file already exists with that same name, detox will not rename the file."_ — this documents the design (never overwrite), but the source shows the one same-inode/single-link exception above that the man page prose doesn't call out explicitly.
 
-**Important scope note**: this collision check is purely local — it only guards against the *specific pairing* being renamed right now. If sequential renames in the same run (e.g. `A.txt`→`X.txt` then later `B.txt`→`X.txt`) collide, the check still applies per-rename at the time each is processed (files are visited via `readdir()` order, which is filesystem-dependent/unspecified), so the second one to be processed loses and is reported "already exists"; there is no batch-level "would multiple sources map to one destination" pre-check across the whole run.
+**Important scope note**: this collision check is purely local — it only guards against the _specific pairing_ being renamed right now. If sequential renames in the same run (e.g. `A.txt`→`X.txt` then later `B.txt`→`X.txt`) collide, the check still applies per-rename at the time each is processed (files are visited via `readdir()` order, which is filesystem-dependent/unspecified), so the second one to be processed loses and is reported "already exists"; there is no batch-level "would multiple sources map to one destination" pre-check across the whole run.
 
 ---
 
 ## 6. Recursion, symlink, and special-file behavior
 
-- **`-r`/`--recursive`**: descends into subdirectories found via `readdir()`. A directory entry is renamed (via the normal filter sequence, same as a file) **before** recursing into it, and the recursion uses the *possibly-renamed* path (`src/filelist.c: parse_dir` — `work = parse_file(new_file, options); if (options->recurse) parse_dir(work, options);`).
-- **Dotfile/dot-directory skipping during recursion**: any directory entry whose name starts with `.` is unconditionally skipped by `ignore_file()` during the `readdir()` walk — this applies even to `.` itself being filtered out implicitly, and to any user dotfile/dotdir, *except* entries explicitly named on the command line (the dotfile skip only triggers inside the `readdir` loop in `parse_dir`, not in the top-level `main()` loop over `argv`). Verified:
+- **`-r`/`--recursive`**: descends into subdirectories found via `readdir()`. A directory entry is renamed (via the normal filter sequence, same as a file) **before** recursing into it, and the recursion uses the _possibly-renamed_ path (`src/filelist.c: parse_dir` — `work = parse_file(new_file, options); if (options->recurse) parse_dir(work, options);`).
+- **Dotfile/dot-directory skipping during recursion**: any directory entry whose name starts with `.` is unconditionally skipped by `ignore_file()` during the `readdir()` walk — this applies even to `.` itself being filtered out implicitly, and to any user dotfile/dotdir, _except_ entries explicitly named on the command line (the dotfile skip only triggers inside the `readdir` loop in `parse_dir`, not in the top-level `main()` loop over `argv`). Verified:
   ```
   $ detox -n -v -r .            # recursion into cwd
   # (no lines for .hiddendir or its contents, and no line for ".hidden file.txt")
@@ -231,7 +241,7 @@ Caveat also stated verbatim in `man detox`: *"If, after the translation of a fil
 detox performs **no charset auto-detection whatsoever**. The user statically picks a sequence (e.g. `default`, `iso8859_1`, `iso8859_1-legacy`, `utf_8`) via `-s`/`DETOX_SEQUENCE`/config, and each filter blindly assumes its target encoding:
 
 - The `safe` filter is a byte-oriented filter with no table entries above 0x7F (in the current, non-legacy tables) and no `default`, so it is encoding-agnostic by omission — it happens to be safe to run on UTF-8 names only because it doesn't touch anything ≥0x80 at all.
-- The `iso8859_1` filter treats **every** byte ≥0x80 as a standalone Latin-1/CP-1252 code unit and transcodes it byte-by-byte to its UTF-8 encoding. If the input is *already* UTF-8, this is catastrophically wrong: each byte of a multi-byte UTF-8 sequence gets independently reinterpreted as a Latin-1 character and re-encoded, producing classic "mojibake". **Verified**:
+- The `iso8859_1` filter treats **every** byte ≥0x80 as a standalone Latin-1/CP-1252 code unit and transcodes it byte-by-byte to its UTF-8 encoding. If the input is _already_ UTF-8, this is catastrophically wrong: each byte of a multi-byte UTF-8 sequence gets independently reinterpreted as a Latin-1 character and re-encoded, producing classic "mojibake". **Verified**:
   ```
   $ touch café.txt              # é stored as UTF-8 bytes 0xC3 0xA9
   $ detox -n -v -s iso8859_1 café.txt
@@ -240,9 +250,9 @@ detox performs **no charset auto-detection whatsoever**. The user statically pic
   (0xC3 got transcoded to U+00C3 `Ã`, and 0xA9 to U+00A9 `©`, i.e. exactly the well-known "double-encoding" mojibake pattern.)
 - The `utf_8` filter correctly decodes multi-byte UTF-8 and is safe to run on genuine UTF-8 filenames (verified: `café.txt` and an emoji filename pass through the `utf_8` sequence completely unchanged, since neither character is a control character in `unicode.tbl`).
 - **There is no mechanism in the source that inspects the byte stream and picks `iso8859_1` vs `utf_8` automatically.** Choosing wrong is entirely on the operator/config-author. The two filters are explicitly documented as "mutually exclusive" (detoxrc man page) precisely because running both, or running the wrong one, corrupts data — but nothing in the program prevents a user from configuring both or from choosing the ISO-8859-1 sequence against UTF-8-encoded filenames.
-- Locale-sensitivity exists only for the **`start lang` block** inside a `.tbl` file (per §3) — that reads the process's language locale to select an override sub-block within an otherwise-static table the user chose. This is not encoding detection of the *input filename*; it only affects which *replacement string* is used for a given already-known input character.
+- Locale-sensitivity exists only for the **`start lang` block** inside a `.tbl` file (per §3) — that reads the process's language locale to select an override sub-block within an otherwise-static table the user chose. This is not encoding detection of the _input filename_; it only affects which _replacement string_ is used for a given already-known input character.
 
-macOS-specific note observed during testing: attempting to create a filename containing a raw non-UTF-8 byte sequence (e.g. a literal Latin-1 `é` = `0xE9`, not valid UTF-8 on its own) fails at the OS level (`OSError: [Errno 92] Illegal byte sequence`) — APFS/HFS+ requires valid UTF-8 filenames, so genuinely mis-encoded Latin-1/CP-1252 filenames (the classic case this filter targets) could not be materialized in this sandbox to test directly; the iso8859_1 mojibake reproduction above instead demonstrates the *reverse* failure mode (correct UTF-8 misinterpreted as Latin-1), which is the same underlying bug class and is fully reproducible.
+macOS-specific note observed during testing: attempting to create a filename containing a raw non-UTF-8 byte sequence (e.g. a literal Latin-1 `é` = `0xE9`, not valid UTF-8 on its own) fails at the OS level (`OSError: [Errno 92] Illegal byte sequence`) — APFS/HFS+ requires valid UTF-8 filenames, so genuinely mis-encoded Latin-1/CP-1252 filenames (the classic case this filter targets) could not be materialized in this sandbox to test directly; the iso8859_1 mojibake reproduction above instead demonstrates the _reverse_ failure mode (correct UTF-8 misinterpreted as Latin-1), which is the same underlying bug class and is fully reproducible.
 
 ---
 
@@ -264,7 +274,7 @@ All below run from `/private/tmp/.../scratchpad/detox-probe`.
 
 6. **Leading `#`/`-`/`_` stripping happens only in `wipeup`, not `safe`** — a filename starting with `#` (`#hashfile.txt`) is unaffected by `safe` (which has no entry for `0x23`) and is fixed only because `wipeup` unconditionally strips leading `# - _` from the front of the string, independent of the run-collapsing logic. If a config's sequence omits `wipeup`, a leading `#` is never removed.
 
-7. **`wipeup`'s collapse precedence is positional, not "most special wins"**: for the default sequence (`remove_trailing` *not* set — see the shipped detoxrc, which *does* actually set `remove_trailing`, so this specific default doesn't apply, but a config lacking it would), the precedence among `- _` in a mixed run is dash-over-underscore purely because `-` appears before `_` in the hardcoded search string `"-_"` — i.e., it is an implementation artifact of `strchr(search, *input_walk)` position, not a documented "specialness" ranking, though the man page does describe the resulting precedence order accurately (dash > underscore; with `remove_trailing`, period > dash > underscore).
+7. **`wipeup`'s collapse precedence is positional, not "most special wins"**: for the default sequence (`remove_trailing` _not_ set — see the shipped detoxrc, which _does_ actually set `remove_trailing`, so this specific default doesn't apply, but a config lacking it would), the precedence among `- _` in a mixed run is dash-over-underscore purely because `-` appears before `_` in the hardcoded search string `"-_"` — i.e., it is an implementation artifact of `strchr(search, *input_walk)` position, not a documented "specialness" ranking, though the man page does describe the resulting precedence order accurately (dash > underscore; with `remove_trailing`, period > dash > underscore).
 
 8. **`max_length`'s "look back up to 5 characters for an earlier dot" heuristic for double extensions is a fixed, non-configurable magic number.** `.tar.gz` (4 chars between dots) is preserved as a unit; an extension scheme with a slightly longer first suffix (e.g. `.tar.bz2` has `.tar` = 4 chars, still under 5, so `name.tar.bz2` → verified conceptually would also keep `.tar.bz2` as a unit) works, but anything with a "sub-extension" name longer than 4 characters (5th char triggers the `break`) would **not** be recognized as a compound extension and would instead only preserve the last `.ext`. Not independently re-verified beyond the `.tar.gz` case in §2, but the 5-character window is explicit and hardcoded in `clean_max_length()`.
 
@@ -275,6 +285,7 @@ All below run from `/private/tmp/.../scratchpad/detox-probe`.
 ## Confidence & Sources
 
 **Verified by running the installed binary** (highest confidence — all commands reproducible verbatim in `/private/tmp/.../scratchpad/detox-probe`):
+
 - All CLI flag behaviors demonstrated with actual invocations (§1: `-h`, `-L -v`, `-n`, `-s`, `-f`, `--special`, `DETOX_SEQUENCE`, `-V`).
 - Default `safe`+`wipeup` sequence effects on: spaces, brackets, ampersand, leading `#`/`_`/`-` runs, control byte `0x01`, `%`-encoding survival, case preservation, UTF-8 bytes (café, emoji) passing through unchanged, directory renaming during recursion.
 - `iso8859_1`, `utf_8`, `lower`, `uncgi` sequences via `-s`.
@@ -286,6 +297,7 @@ All below run from `/private/tmp/.../scratchpad/detox-probe`.
 - `detox -L -v` full sequence/filter dump of the shipped `/opt/homebrew/etc/detoxrc`.
 
 **Read directly, full text, high confidence (primary documents)**:
+
 - `man detox` (detox.1), `man detoxrc` (detoxrc.5), `man detox.tbl` (detox.tbl.5) — all read in full via `col -b`.
 - Shipped `/opt/homebrew/etc/detoxrc` (full file, 134 lines).
 - Shipped tables, full text: `safe.tbl` (97 lines), `iso8859_1.tbl` (131 lines), `cp1252.tbl` (65 lines), `unicode.tbl` (222 lines).
@@ -294,7 +306,8 @@ All below run from `/private/tmp/.../scratchpad/detox-probe`.
 - `CHANGELOG.md` header entries (version numbers/dates only, not full changelog bodies).
 
 **Inferred / not independently re-verified**:
-- The exact `max_length` 5-character-lookback boundary behavior for extension names *longer* than 4 characters (item 8 in §8) is derived from reading `clean_max_length()`'s loop condition (`extension - input_walk > 5` breaks the backward scan) rather than from an additional test run with such a filename.
+
+- The exact `max_length` 5-character-lookback boundary behavior for extension names _longer_ than 4 characters (item 8 in §8) is derived from reading `clean_max_length()`'s loop condition (`extension - input_walk > 5` breaks the backward scan) rather than from an additional test run with such a filename.
 - That the on-disk shipped tables are bit-identical to the compiled-in builtins is inferred from the existence of `bin/generate-builtin.sh` in the source tree (which generates builtin C tables from the `.tbl` files) rather than from a byte-level diff of binary vs. table file.
 - Homebrew's `DATADIR`/`SYSCONFDIR` build-time values were inferred from where `detox -L -v` reported its source file and from successfully loading `/opt/homebrew/share/detox/*.tbl` without an explicit `-f`/`filename`, not from inspecting the Homebrew build recipe's configure flags directly (though `.brew/detox.rb` exists in the Cellar and was not opened).
 - Behavior of a genuinely mis-encoded (non-UTF-8) Latin-1/CP-1252 filename under the `iso8859_1` filter was **not** directly reproduced, because APFS refused to create such a filename in this sandbox (`OSError: Illegal byte sequence`); the reverse corruption (valid UTF-8 fed to `iso8859_1`) was reproduced instead and is presented in §7/§8 as the verified evidence for this bug class.

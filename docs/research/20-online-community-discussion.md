@@ -59,29 +59,35 @@ up as community sentiment.
 - **Arch Linux Forums, "[solved] repairing filename encoding"** (2009), user `manouchk`, resolved
   2009-05-10: after asking how to fix filename charset problems, the OP reports success combining
   `convmv` (encoding conversion) with `detox` (character stripping):
+
   > "I'm solving now using convmv and detox to get rid of the non-ascii caracters!"
 
   Posted commands:
+
   ```
   convmv -f iso-8859-1 -t utf8 --replace --notest -r ~/Documents/*
   convmv -f utf8 -t iso-8859-1 --fixdouble --replace --notest -r ~/Documents/*
   detox -s utf_8 -r ~/Documents
   ```
+
   This is a real, dated, verbatim workflow: two-step encoding repair (convmv) followed by detox as
   the cleanup pass, scoped with `-s utf_8` and run recursively.
   [https://bbs.archlinux.org/viewtopic.php?id=63393](https://bbs.archlinux.org/viewtopic.php?id=63393)
 
 - **Arch Linux Forums, "[REQUEST] detox, txt2regex, sprog"** (2005-06-29), AUR package request
   thread. OP `zsoltika` (Budapest, Hungary) states the actual job:
+
   > "I have to work a lot with 1000s of textfiles with different tools, so I used to use detox and
   > txt2regex back my good — now more better — old Gentoo days."
 
   and later clarifies the concrete pain point:
+
   > "sometimes working on 1000's of files with accents in their names and spaces, and so on..."
 
   A skeptical reply from `Gullible Jones` initially argued detox was unnecessary ("Just use
   quotation marks for files with nonstandard names when you're working from the command line"),
   then reversed after the accented-filename point landed:
+
   > "Ah... Accents... I forgot about those completely. Yep, I can see why it's useful now..."
 
   This is the clearest "comparison where someone considered NOT using detox, then changed their
@@ -98,11 +104,14 @@ up as community sentiment.
   crashed mid-run because of one file with a non-compliant name synced in from macOS ("Unicode
   quirks and special symbols that Linux and the backup tool couldn't process"). Fix: insert detox
   as a preprocessing step before the backup runs:
+
   ```
   detox -r -s utf_8 -s iso8859_1 -v /data
   rdiff-backup /data /mnt/backup/data
   ```
+
   Author's own words on the outcome:
+
   > "my rdiff-backup runs have been smooth as butter — even when syncing messy files from macOS,
   > USB sticks, or synced cloud folders."
 
@@ -116,6 +125,7 @@ up as community sentiment.
 Ubuntu Forums search results (site itself is now offline, see below) surfaced titles/snippets
 indicating real workflows, but the pages could not be independently fetched to verify verbatim
 text, so these are reported as snippet-only, lower-confidence:
+
 - A thread "Vanishing mp3s" apparently involving detox and a music library where files with slash
   characters in names caused problems.
 - A thread "Clean names of all pdf files" apparently using a `find`+`xargs`+`detox` pipeline of
@@ -146,6 +156,7 @@ snippets, not text read directly off the page (the venue is dead; see below).
   [https://lobste.rs/s/d0ptcu/what_are_your_favourite_pieces_software](https://lobste.rs/s/d0ptcu/what_are_your_favourite_pieces_software),
   comment dated 2023-03-13, user listed as `inactive-user` (account since deleted/renamed) in the
   fetched content:
+
   > "https://github.com/dharple/detox — would be good if it was a library, so that one could have
   > one config, and have detoxing on the command line and in fileselector dialogs."
 
@@ -208,7 +219,7 @@ verified user quote.
   compatibility, vanishing MP3s, PDF cleanup, image library dedup) but none could be read directly,
   so none of their content is reported as verified above.
 - **LinuxQuestions.org**: three relevant threads were identified by title/URL (`[SOLVED] detox -
-  sanitize filenames`, 2016-11-11; `detox 2 - I'm back`; `bash detox html references`), but the
+sanitize filenames`, 2016-11-11; `detox 2 - I'm back`; `bash detox html references`), but the
   site returned HTTP 403 to every fetch attempt (both `WebFetch` and a sandboxed `curl` with a
   browser user-agent), indicating active bot-blocking (Cloudflare or similar). Content could not be
   verified; nothing from these threads is quoted above.

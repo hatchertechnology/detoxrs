@@ -63,7 +63,7 @@ No tutorial recommends pairing detox with version control or `git mv`; the backu
 Overwhelmingly: **it removes spaces and problematic characters from filenames automatically, in bulk**, framed as the fix for files that came from Windows/macOS or bulk downloads.
 
 - "This is a great tool to use if you import files from other operating systems or download lots of files online" — search-result synthesis of [linuxconfig.org's article](https://linuxconfig.org/clean-up-filenames-with-detox-command-line-utility) (page itself returned HTTP 403 on direct fetch; this line is from the search snippet only, not independently verified against the live page — flagged per honesty rules).
-- apt-upgrade.me leads with a concrete failure story: an automated `rdiff-backup` job silently failed because a macOS-originated file had Unicode quirks Linux backup tooling couldn't handle; detox is positioned as the fix run *before* backup jobs.
+- apt-upgrade.me leads with a concrete failure story: an automated `rdiff-backup` job silently failed because a macOS-originated file had Unicode quirks Linux backup tooling couldn't handle; detox is positioned as the fix run _before_ backup jobs.
 - Delightly Linux frames the use case as hundreds of poorly-named files across many directories, and jokes "this is not a health diet" to disambiguate from the wellness sense.
 
 ## Use cases tutorials target
@@ -75,7 +75,7 @@ Overwhelmingly: **it removes spaces and problematic characters from filenames au
 
 ## Warnings and caveats
 
-- Detox is destructive to the *name*, not content: "detox renames files, so you will lose the original name" — Delightly Linux.
+- Detox is destructive to the _name_, not content: "detox renames files, so you will lose the original name" — Delightly Linux.
 - "It does not correct spelling or rename words. It only removes problematic characters" — Delightly Linux, quoting the tool's own scope limit.
 - Duplicate filenames can result after two different original names collapse to the same sanitized name — dotlinux.net.
 - Recursive scope is easy to misjudge: without `-r`, only the top-level directory name changes, not its contents — Mabox Linux forum.
@@ -94,32 +94,32 @@ Direct comparisons are thin. Findings:
 
 ## Distro packaging state
 
-| Distro/system | Version | Notes | Source |
-|---|---|---|---|
-| Arch Linux (extra) | 3.0.1-1 | Last updated 2025-08-23 | [archlinux.org](https://archlinux.org/packages/extra/x86_64/detox/) |
-| Debian (sid/utils) | 3.0.1-1 | Maintainer Joao Eriberto Mota Filho; provides `detox` + `inline-detox`; also in trixie (stable) and forky (testing); **not** on Debian's orphaned-packages list (checked directly) | [packages.debian.org](https://packages.debian.org/sid/utils/detox), [Debian orphaned list](https://www.debian.org/devel/wnpp/orphaned) |
-| FreeBSD ports (sysutils) | 3.0.1 | Maintainer Kirill Ponomarev; last port update 2026-02-23 | [FreshPorts](https://www.freshports.org/sysutils/detox/) |
-| Gentoo (app-misc) | — (page fetched; no explicit version pinned in text) | Standard `emerge --ask app-misc/detox` | [Gentoo Wiki](https://wiki.gentoo.org/wiki/Detox) |
-| Fedora/RHEL | — | `sudo dnf install detox -y` | [putorius.net](https://www.putorius.net/linux-detox-clean-up-filenames-with-space-and-special-characters.html) |
-| Ubuntu/Debian (apt) | — (per-article) | Requires `universe` repo per putorius; plain `sudo apt install detox` per Delightly Linux/apt-upgrade.me | putorius.net, Delightly Linux |
-| Linux Mint | — | Listed in Software Manager; no version/review shown on the software page | [community.linuxmint.com](https://community.linuxmint.com/software/view/detox) |
+| Distro/system            | Version                                              | Notes                                                                                                                                                                              | Source                                                                                                                                 |
+| ------------------------ | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Arch Linux (extra)       | 3.0.1-1                                              | Last updated 2025-08-23                                                                                                                                                            | [archlinux.org](https://archlinux.org/packages/extra/x86_64/detox/)                                                                    |
+| Debian (sid/utils)       | 3.0.1-1                                              | Maintainer Joao Eriberto Mota Filho; provides `detox` + `inline-detox`; also in trixie (stable) and forky (testing); **not** on Debian's orphaned-packages list (checked directly) | [packages.debian.org](https://packages.debian.org/sid/utils/detox), [Debian orphaned list](https://www.debian.org/devel/wnpp/orphaned) |
+| FreeBSD ports (sysutils) | 3.0.1                                                | Maintainer Kirill Ponomarev; last port update 2026-02-23                                                                                                                           | [FreshPorts](https://www.freshports.org/sysutils/detox/)                                                                               |
+| Gentoo (app-misc)        | — (page fetched; no explicit version pinned in text) | Standard `emerge --ask app-misc/detox`                                                                                                                                             | [Gentoo Wiki](https://wiki.gentoo.org/wiki/Detox)                                                                                      |
+| Fedora/RHEL              | —                                                    | `sudo dnf install detox -y`                                                                                                                                                        | [putorius.net](https://www.putorius.net/linux-detox-clean-up-filenames-with-space-and-special-characters.html)                         |
+| Ubuntu/Debian (apt)      | — (per-article)                                      | Requires `universe` repo per putorius; plain `sudo apt install detox` per Delightly Linux/apt-upgrade.me                                                                           | putorius.net, Delightly Linux                                                                                                          |
+| Linux Mint               | —                                                    | Listed in Software Manager; no version/review shown on the software page                                                                                                           | [community.linuxmint.com](https://community.linuxmint.com/software/view/detox)                                                         |
 
 No distro documentation flags detox as orphaned or unmaintained at the packaging level — orphan status is upstream-only (see headline finding above), and it hasn't propagated to any distro page yet.
 
 ## Flags seen in the wild
 
-| Flag | Frequency across fetched sources | Example |
-|---|---|---|
-| `-n` / `--dry-run` | Very high — every hands-on tutorial fetched | `detox -n *` — [Delightly Linux](https://delightlylinux.wordpress.com/2023/12/07/clean-up-filenames-with-detox/) |
-| `-r` (recursive) | High — 6 of 9 hands-on sources | `detox -r /your/directory` — [apt-upgrade.me](https://www.apt-upgrade.me/2025/07/24/%F0%9F%A7%BC-cleaning-up-filenames-on-linux-with-detox-the-tiny-tool-that-saved-my-backups/) |
-| `-v` (verbose) | High — 4 of 9 hands-on sources | `detox -r -s utf_8 -s iso8859_1 -v /data` — apt-upgrade.me |
-| `-s sequence` | Medium — used when accent/Unicode transliteration is wanted | `detox -s iso8859_1 "Café.jpg"` — [dotlinux.net](https://www.dotlinux.net/blog/clean-up-filenames-with-detox-command-line-utility/) |
-| `-L` (list sequences) | Medium — reference-style mentions | `detox -L` — Mabox forum, dotlinux.net |
-| `-V` / `--version` | Low | `detox --version` — dotlinux.net; `detox -V` — Mabox forum |
-| `-R` (custom replacement char) | Low — one mention only | described, not demonstrated live, per search-snippet summary of a rename-tools roundup |
-| `-f configfile` | Reference-docs only, never in a tutorial walkthrough | Gentoo Wiki, Arch man page |
-| `--special` | Reference-docs only, never in a tutorial walkthrough | Gentoo Wiki, Arch man page |
-| `--inline` / `inline-detox` | Low — packaging docs only | Debian package page, Linux Mint software page |
+| Flag                           | Frequency across fetched sources                            | Example                                                                                                                                                                          |
+| ------------------------------ | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-n` / `--dry-run`             | Very high — every hands-on tutorial fetched                 | `detox -n *` — [Delightly Linux](https://delightlylinux.wordpress.com/2023/12/07/clean-up-filenames-with-detox/)                                                                 |
+| `-r` (recursive)               | High — 6 of 9 hands-on sources                              | `detox -r /your/directory` — [apt-upgrade.me](https://www.apt-upgrade.me/2025/07/24/%F0%9F%A7%BC-cleaning-up-filenames-on-linux-with-detox-the-tiny-tool-that-saved-my-backups/) |
+| `-v` (verbose)                 | High — 4 of 9 hands-on sources                              | `detox -r -s utf_8 -s iso8859_1 -v /data` — apt-upgrade.me                                                                                                                       |
+| `-s sequence`                  | Medium — used when accent/Unicode transliteration is wanted | `detox -s iso8859_1 "Café.jpg"` — [dotlinux.net](https://www.dotlinux.net/blog/clean-up-filenames-with-detox-command-line-utility/)                                              |
+| `-L` (list sequences)          | Medium — reference-style mentions                           | `detox -L` — Mabox forum, dotlinux.net                                                                                                                                           |
+| `-V` / `--version`             | Low                                                         | `detox --version` — dotlinux.net; `detox -V` — Mabox forum                                                                                                                       |
+| `-R` (custom replacement char) | Low — one mention only                                      | described, not demonstrated live, per search-snippet summary of a rename-tools roundup                                                                                           |
+| `-f configfile`                | Reference-docs only, never in a tutorial walkthrough        | Gentoo Wiki, Arch man page                                                                                                                                                       |
+| `--special`                    | Reference-docs only, never in a tutorial walkthrough        | Gentoo Wiki, Arch man page                                                                                                                                                       |
+| `--inline` / `inline-detox`    | Low — packaging docs only                                   | Debian package page, Linux Mint software page                                                                                                                                    |
 
 Flags never once seen in a tutorial, blog, or forum post despite being documented: `-f`, `--special`. These are pure reference-manual territory.
 
