@@ -89,7 +89,7 @@ short-circuiting (stops filtering, returns NULL) the moment any filter returns N
 man page explicitly says you can chain multiple `iso8859_1` filters "as long as the default value
 of all but the last one [is] empty" [man/detoxrc.5:109-113](https://github.com/dharple/detox/blob/0a8e212/man/detoxrc.5#L109-L113).
 The `cp1252.tbl` table indeed ships with `default` commented out
-[table/cp1252.tbl:16-19](https://github.com/dharple/detox/blob/0a8e212/table/cp1252.tbl#L16-L19), so
+[table/cp1252.tbl:22](https://github.com/dharple/detox/blob/0a8e212/table/cp1252.tbl#L22), so
 unmapped bytes fall through to the next filter in the chain instead of being replaced/dropped.
 
 ## 3. Per-filter detail
@@ -114,7 +114,7 @@ not explicitly listed pass through unchanged, confirmed by test:
 [tests/unit/test_clean_safe.c:46,59-60](https://github.com/dharple/detox/blob/0a8e212/tests/unit/test_clean_safe.c#L46).
 
 Worked example (builtin safe table): `&ampersand` → `_and_ampersand` (0x26 maps to the literal
-string `_and_`, not a single char) [table/safe.tbl:91-93](https://github.com/dharple/detox/blob/0a8e212/table/safe.tbl#L91-L93),
+string `_and_`, not a single char) [table/safe.tbl:94](https://github.com/dharple/detox/blob/0a8e212/table/safe.tbl#L94),
 verified by test [tests/unit/test_clean_safe.c:37](https://github.com/dharple/detox/blob/0a8e212/tests/unit/test_clean_safe.c#L37).
 High bytes (0x80-0xFF, i.e. Latin-1/UTF-8 continuation bytes) are *not* in the safe table at all, so
 they pass through raw — `clean_safe` runs *after* `iso8859_1`/`utf_8` in every shipped sequence for
@@ -129,19 +129,31 @@ value itself (0x80-0xFF) as the table key. This means it operates on raw bytes �
 the input is validly encoded anything — it does not attempt to detect or skip multi-byte UTF-8
 sequences, it treats every high-bit byte independently.
 
-Builtin `iso8859_1.tbl` has `default _` [table/iso8859_1.tbl:19](https://github.com/dharple/detox/blob/0a8e212/table/iso8859_1.tbl#L19)
+Builtin `iso8859_1.tbl` has `default _` [table/iso8859_1.tbl:18](https://github.com/dharple/detox/blob/0a8e212/table/iso8859_1.tbl#L18)
 — any 0x80-0xFF byte not individually listed collapses to `_`. Table only defines rows for
-0xA0-0xFF [table/iso8859_1.tbl:29-30 onward](https://github.com/dharple/detox/blob/0a8e212/table/iso8859_1.tbl#L29), so 0x80-0x9F (the C1
+0xA0-0xFF [table/iso8859_1.tbl:28 onward](https://github.com/dharple/detox/blob/0a8e212/table/iso8859_1.tbl#L28), so 0x80-0x9F (the C1
 control range, undefined in ISO-8859-1) always hit the `default` and become `_`.
 
 Worked example: byte `0xA9` (©, ISO-8859-1) → table row emits the 2-byte UTF-8 encoding of U+00A9
-(`©`, i.e. bytes `0xC2 0xA9`) [table/iso8859_1.tbl entry for 0x00A9].
+(`©`, i.e. bytes `0xC2 0xA9`) [table/iso8859_1.tbl:37](https://github.com/dharple/detox/blob/0a8e212/table/iso8859_1.tbl#L37). Note this
+builtin row's *source* text (in `table/iso8859_1.tbl` and, after generation, in `src/builtin_table.c`)
+is the C-escape literal spelled out as six ASCII characters (backslash, `u`, `0`, `0`, `A`, `9`), not a raw © glyph — see §4's `\uXXXX` discussion for why that's
+only decoded at compile time, yet still ends up as real UTF-8 bytes in the shipped binary.
 
 ### 3.3 `cp1252` — same filter, different table
 
 There is no separate CP-1252 filter/cleaner; `cp1252` is only a builtin *table* selected via
 `iso8859_1 { builtin "cp1252"; };` [src/filter.c:119-121](https://github.com/dharple/detox/blob/0a8e212/src/filter.c#L119-L121).
 It reuses `clean_iso8859_1` verbatim.
+
+Worked example, dedicated CP-1252 test fixture: byte `0x81` (undefined in both CP-1252 and
+Latin-1) → `-` (an explicit table row, not the table's `default`, since `cp1252.tbl`'s `default`
+is commented out — see §5)
+[tests/unit/test_clean_iso8859_1_cp1252.c:50-52](https://github.com/dharple/detox/blob/0a8e212/tests/unit/test_clean_iso8859_1_cp1252.c#L50-L52).
+Same fixture also confirms `0x80` (EURO SIGN, CP-1252-specific — undefined in Latin-1) → `€ euro`
+and `0x97` (EM DASH, also CP-1252-specific) → `— em dash`, both mapped to their multi-byte UTF-8
+equivalents rather than collapsed to `_`
+[tests/unit/test_clean_iso8859_1_cp1252.c:40-46](https://github.com/dharple/detox/blob/0a8e212/tests/unit/test_clean_iso8859_1_cp1252.c#L40-L46).
 
 ### 3.4 `utf_8` — `clean_utf_8`
 
@@ -169,11 +181,12 @@ This is the most algorithmically involved filter. Per character:
      them through byte-for-byte) [src/clean_utf_8.c:183-196](https://github.com/dharple/detox/blob/0a8e212/src/clean_utf_8.c#L183-L196).
 
 This "leave it alone" fallback preserves overlong/legacy encodings — e.g. a 2-byte overlong encoding
-of ASCII `0` (`0xC1 0xB0`, decoded value 0x30) is *not* rejected as invalid; it's looked up in the
+of ASCII `0` (`0xC0 0xB0`, decoded value 0x30) is *not* rejected as invalid; it's looked up in the
 table like any other code point and — if unmapped and no default — even the overlong *encoding* survives untouched. The builtin `unicode.tbl` maps this class of overlong-ASCII code points directly
 to their single-byte ASCII form (e.g. `0x0030 → "0"`), collapsing overlong encodings of printable
-ASCII into plain ASCII: test `\xC1\xB0` (2-byte-encoded `0`) → `0` under table with a default set
-[tests/unit/test_clean_utf_8.c:112-115](https://github.com/dharple/detox/blob/0a8e212/tests/unit/test_clean_utf_8.c#L112-L115). This is intentional per the file's own comment: "detox should convert
+ASCII into plain ASCII: test `\xC0\xB0` (2-byte-encoded `0`) → `0` under table with a default set
+[tests/unit/test_clean_utf_8.c:111-115](https://github.com/dharple/detox/blob/0a8e212/tests/unit/test_clean_utf_8.c#L111-L115) (adjacent cases at lines 117-127 cover `\xC0\xA0`→space and the
+`0xC1`-lead-byte overlong forms `0x7E`/`0x7F`). This is intentional per the file's own comment: "detox should convert
 multibyte versions of them to single-byte versions" [table/unicode.tbl:20-25](https://github.com/dharple/detox/blob/0a8e212/table/unicode.tbl#L20-L25).
 
 Builtin `unicode.tbl` has **no `default`** directive (grep of the file confirms no top-level
@@ -215,6 +228,10 @@ No lowercase/uppercase constraint on the hex digits (`isxdigit` accepts both).
 `isupper`/`tolower` per byte, C-locale ASCII only ("only works on ASCII characters" per man page
 [man/detoxrc.5:174-176](https://github.com/dharple/detox/blob/0a8e212/man/detoxrc.5#L174-L176)) — no
 option, no table, always runs to completion, never fails.
+
+Worked examples: `L0W3R` → `l0w3r`, `UPPER` → `upper`, `UPPer_2` → `upper_2` (digits/underscores
+untouched, only ASCII letters affected)
+[tests/unit/test_clean_lower.c:33-36](https://github.com/dharple/detox/blob/0a8e212/tests/unit/test_clean_lower.c#L33-L36).
 
 ### 3.7 `wipeup` — `clean_wipeup`
 
@@ -342,13 +359,24 @@ Grammar, line by line:
   anywhere in [src/parse_table.c](https://github.com/dharple/detox/blob/0a8e212/src/parse_table.c), and `generate_builtin_table.c`'s own `escape_string()` explicitly says "leave `\u` and `\U` alone"
   when re-escaping a parsed value for embedding as a C string literal
   [src/generate_builtin_table.c:43-49](https://github.com/dharple/detox/blob/0a8e212/src/generate_builtin_table.c#L43-L49) — i.e. the `\uXXXX` escape is only ever interpreted by the **C
-  compiler**, at build time, when the generated `builtin_table.c` (containing literal C string
-  literals like `.data = "¡"`) is compiled — confirmed by inspecting the generated file itself:
-  `{ .key = 0x00a1, .data = "¡" }`
-  [src/builtin_table.c line for 0x00a1](https://github.com/dharple/detox/blob/0a8e212/src/builtin_table.c). **Practical consequence: if a user writes `¡` in their own `.tbl` file loaded via
-  `filename "..."` at runtime, it will NOT be decoded — the literal backslash-u-etc. text will be
-  spliced into the output filename.** Users must write the raw UTF-8 bytes directly in their table
-  file (in the appropriate locale/encoding) to get a real Unicode character out.
+  compiler**, at build time, when the generated `builtin_table.c` is compiled. **Correction:** the
+  generated file's *source text* still spells out the six-character escape sequence itself — it is
+  NOT pre-decoded into a UTF-8 glyph by any detox tooling. Confirmed by inspecting the actual generated
+  line, [src/builtin_table.c:102](https://github.com/dharple/detox/blob/0a8e212/src/builtin_table.c#L102):
+  `{ .key = 0x00a1, .data = "¡" }` — that `.data` value, as C source text, is literally
+  `\`, `u`, `0`, `0`, `A`, `1` (six ASCII characters), identical in form to what a raw `.tbl` file
+  would contain. The only thing that differs at runtime is that this text sits inside a *C string
+  literal* that gets fed to a C compiler (producing the real 2-byte UTF-8 encoding of U+00A1 in the
+  compiled `.o`/binary), whereas the same six characters typed into a user's `.tbl` file loaded via
+  `filename "..."` are handed to `parse_table`'s `sscanf`, which performs no such decoding and
+  stores them as literal bytes. **Practical consequence: if a user writes `¡` in their own `.tbl`
+  file loaded via `filename "..."` at runtime, it will NOT be decoded — the literal backslash-u-etc.
+  text will be spliced into the output filename.** Users must write the raw UTF-8 bytes directly in
+  their table file (in the appropriate locale/encoding) to get a real Unicode character out.
+  **Empirically confirmed**: loading a table containing a `0x00A1 "¡"` row via `filename` and running
+  detox against a file whose name contains the actual UTF-8 byte pair `0xC2 0xA1` (¡) produces the
+  literal six-character text `¡` in the output filename, not the original ¡ glyph and not any other
+  decoded form.
 - The file itself is read with plain `fgets`/`sscanf`, so it is encoding-agnostic at the syntax level
   — only the numeric code and the literal replacement bytes matter; the `.tbl` file's own encoding
   must match whatever encoding the *filter* is decoding filenames as (e.g. UTF-8 for `unicode.tbl`,
@@ -369,6 +397,12 @@ modulo hash by code point with linear-scan fallback on collision or when `use_ha
 table fills up (`table->length == table->used`) before all rows are inserted, `table_put` fails
 and the *entire* `.tbl` file fails to parse** (returns NULL, triggering builtin fallback or fatal
 exit depending on caller) [src/table.c:126-128](https://github.com/dharple/detox/blob/0a8e212/src/table.c#L126-L128) — this is generally avoided in practice by the `file_size/6` sizing heuristic (each `code value` line is rarely shorter than 6 bytes), but a pathological very-dense/very-short-line table could hit this.
+`table.c` does have a `table_resize()` helper that can grow a table by copying its rows into a
+larger freshly-`table_init`'d one [src/table.c:46-72](https://github.com/dharple/detox/blob/0a8e212/src/table.c#L46-L72), but `parse_table.c`'s runtime `.tbl`-loading path **never calls it** —
+every caller of `table_resize` is either the `generate_builtin_table`/`check-table` build-time
+tooling or the builtin-table loaders in `builtin_table.c` re-sizing a static compiled-in array at
+startup. So the "table fills up → whole file fails" failure mode above is a real, unmitigated risk
+for user-supplied `.tbl` files, not something silently absorbed by an auto-grow path.
 
 ## 5. Shipped table files (`table/`)
 
@@ -418,3 +452,42 @@ exit depending on caller) [src/table.c:126-128](https://github.com/dharple/detox
   before EOF: traced from `sscanf("%[^\"]", ...)` semantics (captures to end of 1024-byte `work`
   buffer) but not exercised by any test in `tests/`; would need a constructed fixture + `check-table`
   run to confirm no crash/UB.
+
+## Validation log (stage 2)
+
+Adversarial re-check against the same pinned clone/commit, with a compiled `src/detox`/`src/check-table`.
+Every file+line citation in the document was opened and diffed against the cited line range; the
+five load-bearing algorithmic claims were re-derived independently from the code (not from this
+document's own description) and, where practical, exercised empirically against the compiled binary.
+
+| Claim | Verdict | Evidence |
+|---|---|---|
+| (a) `\uXXXX` in `.tbl` files interpreted only at build time by the code generator, never by the runtime parser | CONFIRMED | Read-only: no `\u`/`\x` handling anywhere in `src/parse_table.c` (full file); `generate_builtin_table.c:43-49` `escape_string()` explicitly leaves `\u`/`\U` alone. **Empirically confirmed**: a `.tbl` file with a `0x00A1 "¡"` row, loaded via `filename`, left the literal 6-character escape text in the output filename when run against a real UTF-8 `¡` input byte pair — see §4. |
+| (b) UTF-8 decoder accepts overlong/non-minimal sequences and maps them to the same code point rather than rejecting them | CONFIRMED, with a corrected worked example | Read-only: `get_utf_8_width`/continuation-unpacking in `clean_utf_8.c` never checks minimality. The document's original worked example cited the wrong bytes (`0xC1 0xB0`, which actually decodes to `0x70`/'p'); corrected to `0xC0 0xB0` (decodes to `0x30`/'0'), matching `tests/unit/test_clean_utf_8.c:111-115`. |
+| (c) `clean_max_length` uses a hardcoded 5-char backward window from the last `.`, can bail out and return the original unmodified string | CONFIRMED | Read-only: `src/clean_string.c:250-309`, hardcoded `5` at the `extension - input_walk > 5` check (line 287), give-up path at lines 297-302 returns `wrapped_strdup(filename)` (the original, untruncated string). **Empirically confirmed**: `safe and stuff.tar.gz` at `max_length 7` produced a stderr warning and an unchanged filename. |
+| (d) `-`/`_`/`.` run-collapsing precedence comes from index order inside a literal search string, not an explicit priority table | CONFIRMED | Read-only: `src/clean_string.c:194-245`, `search = wrapped_strdup(remove_trailing ? ".-_" : "-_")` (line 210) then `strchr`/pointer-position comparison (lines 217-220) — no lookup table anywhere. **Empirically confirmed**: default and `remove_trailing` runs against the man-page example produced the exact strings the document claims. |
+| (e) UTF-8-encoded NUL replaced with literal `_hidden_null_` via hardcoded C logic, not the translation table | CONFIRMED | Read-only: `static char *null_replacement = "_hidden_null_";` at `src/clean_utf_8.c:22`, applied at lines 164-167 only when no table entry and no default exist. String spelling and case are exact. |
+| Filter catalog / enum / dispatch switch (§1) | CONFIRMED | Read-only: `src/detox_struct.h:17-25`, `src/config_file_lex.l:28-40`, `src/filter.c:207-239` all match cited ranges exactly; all 7 filters dispatch correctly. |
+| Builtin-table fallback / hard `filename` reference (§1) | CONFIRMED | Read-only: `filter_load_table` is exactly `src/filter.c:131-184`; explicit `filename` takes the `do_search=0` branch (156-181), fatal `exit(EXIT_FAILURE)` on parse failure confirmed at 174-181. |
+| Default sequence and all 11 named sequences (§2) | CONFIRMED | Read-only: every sequence block in `etc/detoxrc` transcribed verbatim and verified filter-by-filter; no omissions or wrong orderings found. |
+| `sequence_choose_default` fallback-to-first-sequence / linked-list short-circuit-on-NULL (§2) | CONFIRMED | Read-only: `src/sequence.c:28-54` and `:98-124` match as described. |
+| `wipeup` worked examples (default and `remove_trailing`) | CONFIRMED, empirically | Both `dotted-line.....part......two.......` and `dotted-line.part.two.` reproduced exactly by running the compiled binary against the man-page example string. |
+| `uncgi` worked examples (`%3Dequals`, `here+and+there`) | CONFIRMED, empirically | Reproduced exactly by the compiled binary. |
+| `max_length` worked examples (max 12/20/7/0) | CONFIRMED, empirically | All four reproduced exactly, including the max-0-is-a-no-op case and the max-7 give-up-with-warning case. |
+| `table/safe.tbl` `&` → `_and_` example | CORRECTED (line drift) | Cited as `:91-93`; actual data row is at `:94` (91-93 is the preceding comment block). |
+| `table/iso8859_1.tbl` `default _` line and data-row start | CORRECTED (line drift) | `default _` is at `:18`, not `:19`; first data row (`0x00A0`) is at `:28`, not `:29-30`. |
+| `table/cp1252.tbl` commented-out `default` | CORRECTED (line drift) | Actual `# default` line is at `:22`, not in the `:16-19` explanatory-comment range originally cited. |
+| Generated `src/builtin_table.c` entry for `0x00a1` | CORRECTED (illustrative detail) | Line number (102) and the fact that the source text still spells out the escape sequence (not a pre-decoded glyph) were clarified; the underlying "compiler decodes it" mechanism was already correct. |
+| `cp1252` filter has no dedicated worked example (§3.3) | CORRECTED (omission) | Added citation to `tests/unit/test_clean_iso8859_1_cp1252.c:40-52` (0x80 EURO SIGN, 0x81 undefined→`-`, 0x97 EM DASH). |
+| `lower` filter has no test citation (§3.6) | CORRECTED (omission) | Added citation to `tests/unit/test_clean_lower.c:33-36`. |
+| `table_resize()` exists but is never called from the runtime `.tbl`-parsing path (§4) | ADDED (omission) | New paragraph in §4: `table_resize` (`src/table.c:46-72`) is used only by build-time tooling and builtin-table startup loaders, never by `parse_table.c` — so the "table fills up → whole file fails" risk is real and unmitigated for user tables. |
+| Parser grammar details in §4 (comments, `start`/`end` states, locale prefix-match direction, quoted-value handling, `code==0` rejection, `table_init` sizing formula) | CONFIRMED | All read-only-verified against `src/parse_table.c`/`src/table.c`; locale prefix-match is bounded by the *parsed token's* length (confirmed asymmetric as claimed), not the locale string's. |
+| Shipped table-file line counts and `default` presence (§5) | CONFIRMED | All 9 files' `wc -l` and `default`-presence checks match exactly. |
+| §7 open items (legacy-table diff, unterminated-quote behavior) | UNVERIFIABLE (as originally flagged) | Confirmed no test fixture exercises the unterminated-quote case; a full legacy-vs-current `unicode.tbl` diff was out of scope for this pass too. |
+
+Empirical testing method: compiled `src/detox`/`src/check-table` from the pinned clone, ran with
+`-n` (dry-run) and small ad hoc config files (`sequence wipeup-only { wipeup { ... }; };`, etc.) against
+throwaway filenames in a scratch directory. All four empirical checks above (wipeup, uncgi, max_length,
+`.tbl` `\u`-escape) reproduced the document's claims exactly, with one correction (the overlong-UTF-8
+worked example's byte values) surfaced by cross-checking the cited test file rather than by the binary
+run itself.

@@ -33,7 +33,8 @@ Non-option build machinery in `configure.ac` that still shapes the binary:
 
 - `AC_CHECK_FUNCS([getopt_long])` → `HAVE_GETOPT_LONG`; when absent, `--help`/long options degrade to short-only getopt and the usage message text itself changes (`-h` vs `-h --help`). [configure.ac:9](https://github.com/dharple/detox/blob/0a8e212/configure.ac#L9); consumed at [src/parse_options.c:23-25](https://github.com/dharple/detox/blob/0a8e212/src/parse_options.c#L23-L25) and [src/parse_options.c:101-105](https://github.com/dharple/detox/blob/0a8e212/src/parse_options.c#L101-L105).
 - `AC_STRUCT_ST_BLOCKS` → `HAVE_STRUCT_STAT_ST_BLOCKS`; when defined, `parse_table()` sizes its hash table from `st_blocks*512` instead of `st_size` for sparse/zero-size-reporting filesystems. [configure.ac:10](https://github.com/dharple/detox/blob/0a8e212/configure.ac#L10); [src/parse_table.c:59-63](https://github.com/dharple/detox/blob/0a8e212/src/parse_table.c#L59-L63).
-- `AC_SYS_LARGEFILE` — enables large-file `stat`/off_t support on 32-bit systems; affects ability to stat very large files but not observed logic branches. [configure.ac:12](https://github.com/dharple/detox/blob/0a8e212/configure.ac#L12).
+- `AC_SYS_LARGEFILE` — enables large-file `stat`/off_t support on 32-bit systems; affects ability to stat very large files but not observed logic branches. [configure.ac:12](https://github.com/dharple/detox/blob/0a8e212/configure.ac#L12). **Correction (empirical):** on autoconf 2.73 (used to regenerate `configure` in this clone), this single macro invocation also synthesizes two user-facing flags not literally present in `configure.ac`'s text: `--disable-largefile` (omit large-file support) and `--enable-year2038` (support timestamps after 2038). Verified via `./configure --help` — see §9 validation log.
+- `AC_SEARCH_LIBS([ceil], [m])` — links `-lm` if `ceil()` isn't already in libc; consumed only by the `noinst_PROGRAMS` dev tools `generate-builtin-table` ([src/generate_builtin_table.c:149](https://github.com/dharple/detox/blob/0a8e212/src/generate_builtin_table.c#L149)) and `check-table` ([src/check_table.c:261](https://github.com/dharple/detox/blob/0a8e212/src/check_table.c#L261)), not by the installed `detox`/`inline-detox` binaries. Build-only, omitted from the original pass. [configure.ac:17](https://github.com/dharple/detox/blob/0a8e212/configure.ac#L17).
 - `AC_CHECK_PROGS([MANDOC])` → `AM_CONDITIONAL([MANDOC_INSTALLED])` — build/doc-lint tooling only, no runtime effect. [configure.ac:14-15](https://github.com/dharple/detox/blob/0a8e212/configure.ac#L14-L15).
 - Compiler-flag autodetection (`-flto=auto`, `-fstack-clash-protection`, `-fstack-protector-strong`) — hardening flags, no behavioral effect. [configure.ac:49-51](https://github.com/dharple/detox/blob/0a8e212/configure.ac#L49-L51).
 
@@ -41,12 +42,12 @@ Non-option build machinery in `configure.ac` that still shapes the binary:
 
 | Macro | Value | Consumer | Effect |
 |---|---|---|---|
-| `DATADIR` | `$(datadir)` (autoconf, typically `<prefix>/share`) | [src/filter.c:42-49](https://github.com/dharple/detox/blob/0a8e212/src/filter.c#L42-L49), [src/config_file.c:58-63](https://github.com/dharple/detox/blob/0a8e212/src/config_file.c#L58-L63)* | First search location for translation tables (`$DATADIR/detox/<name>`); guarded by `#ifdef DATADIR` since automake always defines it, this is effectively unconditional. |
+| `DATADIR` | `$(datadir)` (autoconf, typically `<prefix>/share`) | [src/filter.c:42-49](https://github.com/dharple/detox/blob/0a8e212/src/filter.c#L42-L49) | First search location for translation tables (`$DATADIR/detox/<name>`); guarded by `#ifdef DATADIR` since automake always defines it, this is effectively unconditional. |
 | `SYSCONFDIR` | `$(sysconfdir)` (typically `<prefix>/etc`) | [src/config_file.c:58-63](https://github.com/dharple/detox/blob/0a8e212/src/config_file.c#L58-L63) | First candidate for the system config file: `$SYSCONFDIR/detoxrc`. |
 | — | `-DYY_NO_INPUT -DYY_NO_UNPUT` | lexer (`config_file_lex.l`) | Flex-generated-code hygiene, no runtime behavior. |
 | — | `-D_FORTIFY_SOURCE=2` | libc | Hardening only. |
 
-\* Correction: `config_file.c`'s use of `SYSCONFDIR` is separate from `filter.c`'s use of `DATADIR` — both are compiled in via `AM_CFLAGS` in [src/Makefile.am:9-16](https://github.com/dharple/detox/blob/0a8e212/src/Makefile.am#L9-L16).
+**Correction (stage 2):** the original DATADIR row cited `src/config_file.c:58-63` as a second consumer. That range is exclusively the `SYSCONFDIR`/`detoxrc` candidate block ([confirmed by reading src/config_file.c:56-63](https://github.com/dharple/detox/blob/0a8e212/src/config_file.c#L56-L63)) — `config_file.c` never references `DATADIR`. The citation has been removed from the DATADIR row above; `DATADIR` is consumed only by `filter.c`. Both macros are compiled in via `AM_CFLAGS` in [src/Makefile.am:9-16](https://github.com/dharple/detox/blob/0a8e212/src/Makefile.am#L9-L16).
 
 Fallback search order once `DATADIR`/`SYSCONFDIR` candidates fail (all hardcoded, not overridable at runtime except via env vars in §2):
 
@@ -83,7 +84,9 @@ The returned locale name (`system_ctype`, falling back to `""` if `setlocale` fa
 
 This means: **whatever `LC_CTYPE` (or `LANG`/`LC_ALL` as read by libc's `setlocale("")`) is set to in the process environment directly gates which conditional translation-table rules apply.** This is a genuine, if narrow, environment-driven behavior: it's the C library's own `LC_CTYPE`/`LANG`/`LC_ALL` resolution (not a `getenv` call in detox's own code) that ultimately decides the match — detox itself never reads `LANG` or `LC_ALL` directly; it defers entirely to libc's `setlocale(LC_CTYPE, "")`, which on Linux/glibc reads `LC_ALL`, then `LC_CTYPE`, then `LANG`, in that order.
 
-No other locale category (`LC_COLLATE`, `LC_MESSAGES`, etc.) is set or queried anywhere in `src/` — grepped `setlocale|LC_` across `src/*.c` and `src/*.h`; the only hits are the three lines above plus the `#include <locale.h>`. Absence of `LC_MESSAGES`/i18n message catalogs (no `gettext`, `catgets`, `.po` files in the repo) is also confirmed: `grep -rn "gettext\|catgets\|dgettext"` over the repo returns nothing. All user-facing strings (`usage_message`, `help_message` in `parse_options.c`) are static English literals with no localization layer. [UNVERIFIED nothing further to check — this is an absence finding backed by the grep above.]
+No other locale category (`LC_COLLATE`, `LC_MESSAGES`, etc.) is set or queried anywhere in `src/` — grepped `setlocale|LC_` across `src/*.c` and `src/*.h`; the only hits are the three lines above plus the `#include <locale.h>`. All user-facing strings (`usage_message`, `help_message` in `parse_options.c`) are static English literals with no localization layer.
+
+**Correction (stage 2):** the claim that `grep -rn "gettext\|catgets\|dgettext"` over the whole repo "returns nothing" is **false**. It returns one hit: `dgettext` at [src/config_file_yacc.c:399](https://github.com/dharple/detox/blob/0a8e212/src/config_file_yacc.c#L399), inside GNU Bison's own generated-parser boilerplate (`config_file_yacc.c` is committed to the repo, generated from `config_file_yacc.y`). Reading the surrounding code shows this is dead in this build: it's gated by `#if defined YYENABLE_NLS && YYENABLE_NLS` / `#if ENABLE_NLS` ([src/config_file_yacc.c:396-397](https://github.com/dharple/detox/blob/0a8e212/src/config_file_yacc.c#L396-L397)), and detox's `configure.ac`/`Makefile.am` never define `YYENABLE_NLS` or `ENABLE_NLS`, so the `YY_()` macro always falls through to `#define YY_(Msgid) Msgid` (plain, unlocalized). The bottom-line conclusion — detox itself has no i18n/message-catalog layer, and no reachable `gettext` call exists in the compiled binary — still holds; only the literal "returns nothing" grep claim was wrong.
 
 ## 4. Filesystem inputs
 
@@ -158,9 +161,46 @@ No other doc files exist in the repo (`find . -iname '*.md' -o -iname '*.txt'` a
 
 ## 8. Summary of absence findings (things detox does NOT do)
 
-- Never calls `gettext`/`catgets`/any i18n message layer — all UI strings are static English (§3).
+- Never *reachably* calls `gettext`/`catgets`/any i18n message layer — all UI strings are static English (§3). One dead `dgettext` reference exists in generated Bison boilerplate (`src/config_file_yacc.c:399`) but is compiled out because `YYENABLE_NLS`/`ENABLE_NLS` are never defined (§3, corrected in stage 2).
 - Never reads `LANG`, `LC_ALL`, `LC_MESSAGES`, `LC_COLLATE`, `TMPDIR`, `PATH`, `XDG_DATA_HOME`, `NO_COLOR`, or any variable beyond the three in §2's table — confirmed by exhaustive `getenv` grep.
 - `$XDG_CONFIG_HOME` unset does **not** trigger the XDG-spec default of `$HOME/.config` — it's simply skipped (§2).
 - No depth limit or symlink-loop guard in recursion — structurally unnecessary because `lstat`+`S_ISDIR` never follows a symlink-to-directory as a directory (§4.3).
 - No distro packaging manifests (deb/rpm/Homebrew) in-repo — only `snap/` (§5).
 - Snap confinement is `devmode` (unsandboxed) — never actually confined despite being packaged as a snap (§5.1).
+
+## Validation log (stage 2)
+
+Independent adversarial re-check against clone at `0a8e212`, read-only except where marked empirical. Method: re-grepped every absence claim from scratch, re-read every cited file:line range, ran `./configure --help` against the pre-generated `configure` script in the clone (autoconf 2.73 toolchain was present, so this ran empirically rather than being skipped).
+
+| Claim | Verdict | Evidence |
+|---|---|---|
+| Exactly 3 `getenv` calls in `src/` (`parse_options.c:133`, `config_file.c:73`, `config_file.c:81`) | CONFIRMED | `grep -rn getenv src/` returns exactly these 3 lines, no others. |
+| Exactly 1 `setlocale` call, in `parse_table.c:49` | CONFIRMED | `grep -rn setlocale src/` returns line 49 (the call) and line 51 (a comment mentioning it), 0 other call sites. |
+| `grep -rn "gettext\|catgets\|dgettext"` over the repo "returns nothing" | REFUTED | Returns 1 hit: `dgettext` at `src/config_file_yacc.c:399`, generated Bison boilerplate, dead (gated by undefined `YYENABLE_NLS`/`ENABLE_NLS`). Conclusion (no reachable i18n) still holds; the grep claim itself was wrong. Doc corrected in §3 and §8. |
+| `$XDG_CONFIG_HOME` unset skips the candidate rather than falling back to `$HOME/.config/detox/detoxrc` | CONFIRMED | `src/config_file.c:81-87`: `getenv("XDG_CONFIG_HOME")` → `if (file_work != NULL)` guards the whole candidate build; no `$HOME/.config` fallback branch exists anywhere in the function. |
+| Config-file candidate order: sysconfdir → `/etc` → `/usr/local/etc` → `$HOME/.detoxrc` → `$XDG_CONFIG_HOME/detox/detoxrc` → spoofed default | CONFIRMED | `src/config_file.c:56-91`, read in full; order matches exactly, merge semantics (`parse_config_file(new, existing, ...)`) confirmed. |
+| DATADIR row cites both `filter.c:42-49` and `config_file.c:58-63` | CORRECTED | `config_file.c:58-63` is the `SYSCONFDIR` block only; `config_file.c` contains zero references to `DATADIR`. Citation removed from the DATADIR row. |
+| `AC_SEARCH_LIBS([ceil],[m])` (configure.ac:17) | OMISSION → added | Not mentioned in the original pass. Confirmed real: links `-lm`, consumed by `ceil()` in `src/generate_builtin_table.c:149` and `src/check_table.c:261` (both `noinst_PROGRAMS`, not the installed binaries). Added to §1.1. |
+| `--enable-year2038` / `--disable-largefile` flags | OMISSION → added (EMPIRICAL) | Not literally present as text in `configure.ac`; both are synthesized by autoconf 2.73's expansion of `AC_SYS_LARGEFILE`. Confirmed by running `./configure --help` in the clone — the toolchain (autoconf/automake, pre-generated `configure`) was present, so this ran empirically rather than being skipped. Added as a note under the `AC_SYS_LARGEFILE` bullet in §1.1. |
+| `configure.ac` option/macro line ranges for `--with-check` (61-82), `--with-coverage` (88-103), `--enable-debug` (109-119), `AC_CHECK_FUNCS([getopt_long])` (9), `AC_STRUCT_ST_BLOCKS` (10), `AC_SYS_LARGEFILE` (12), `AC_CHECK_PROGS([MANDOC])` (14-15), compiler-flag autodetection (49-51) | CONFIRMED | All ranges read and match exactly. |
+| `AM_CFLAGS` at `src/Makefile.am:9-16`; `WITH_COVERAGE` block at `src/Makefile.am:89-106` | CONFIRMED | Both ranges read and match exactly (line 9 `AM_CFLAGS =` through 16 `-Werror`; line 89 `if WITH_COVERAGE` through 106 `endif`). |
+| `dist_pkgdata_DATA`/`dist_legacy_DATA` at `Makefile.am:14-26` | CONFIRMED | Lines 14-18 = `dist_pkgdata_DATA` (4 tables), 20-26 = `legacydir`/`dist_legacy_DATA` (4 legacy tables); range covers both blocks as claimed. |
+| `filter_find_table()` DATADIR fallback chain at `src/filter.c:42-65` | CONFIRMED | Read in full; `#ifdef DATADIR` block (42-49) → `/usr/share/detox` (52-58) → `/usr/local/share/detox` (60-63) → return, matches exactly. |
+| `lstat()` on command-line args, dispatch on `S_ISDIR`/`S_ISREG`/`special` at `src/detox.c:97-109` | CONFIRMED | Read in full, matches exactly including the `else if (main_options->special)` branch at line 107. |
+| Inline-mode `lstat()`, directories rejected, at `src/detox.c:115-124` | CONFIRMED | Read in full, matches. |
+| `stat()` (not `lstat`) on table files, sizing hash table from `st_size`/`st_blocks`, at `src/parse_table.c:44-63` | CONFIRMED | Read in full, matches exactly including the `HAVE_STRUCT_STAT_ST_BLOCKS` branch. |
+| `parse_dir` walk: `lstat` dir itself, `opendir`/`readdir`, `lstat` each entry, at `src/file.c:176-232` | CONFIRMED | Read in full, matches exactly. |
+| Rename safety check (`st_dev`/`st_ino`/`st_nlink` comparison) at `src/file.c:124-140` | CONFIRMED | Read in full, matches exactly. |
+| EMFILE → `exit(EXIT_FAILURE)` on `opendir()` failure at `src/file.c:192-203` | CONFIRMED | Read in full, matches exactly; all other `opendir` failures print `strerror(errno)` and return (non-fatal). |
+| Dotfile/`.`/`..` and `files_to_ignore` gating at `src/file.c:33-48` | CONFIRMED | Read in full, matches exactly. |
+| Symlink-loop immunity: a symlink-to-directory is never entered as a directory because `lstat` (not `stat`) classifies it as neither `S_ISDIR` nor `S_ISREG` | CONFIRMED | Traced `parse_dir`'s per-entry `lstat` (`src/file.c:217-227`): a dir-symlink fails `S_ISDIR`, so it only reaches `parse_file` (rename, no recursion) when `options->special` is set, and is otherwise skipped — never passed to `parse_dir` again. |
+| `HAVE_GETOPT_LONG` gating of `#include <getopt.h>` (parse_options.c:23-25) and the `-h`/`-h --help` usage-text branch (parse_options.c:101-105) | CONFIRMED | Read in full, matches exactly (verified against the `inline-detox` help-message block, lines ~99-107). |
+| `bin/` inventory: 9 scripts, none in `bin_PROGRAMS`/install targets, only referenced by `make internals` | CONFIRMED | `ls bin/` returns exactly the 9 named scripts; `grep -rn "bin/" Makefile.am` shows only the 4 `internals:` target lines reference them. |
+| Doc inventory: 5 `.md` files at repo root, plus `LICENSE`, plus `man/*` | CONFIRMED (with caveat) | `find . -maxdepth 1 -iname '*.md' -o -maxdepth 1 -iname '*.txt'` returns exactly the 5 named `.md` files. Caveat: a non-root-scope `find . -iname '*.txt'` also turns up two test-fixture files, `tests/legacy/man-page-example/expected.detox.tbl.5.txt` and `expected.detoxrc.5.txt` — these are man-page regression-test fixtures, not documentation, so the doc's "root scope" qualifier was accurate and no correction was needed, but the caveat is noted here for completeness. |
+| snap `confinement: devmode` comment at `snap/snapcraft.yaml:11-12`; pinned tarball `v3.0.0-beta2` at line 19; single `detox` app at lines 25-27 | CONFIRMED | All three ranges read and match exactly. |
+| THANKS.md credits `ninedotnine` (XDG support) and `a1346054` (maintenance); Sean M. Burke / Behat PHP port credited for `unidecode.tbl` | CONFIRMED | Read `THANKS.md` in full, matches verbatim. |
+| CHANGELOG.md: 3.0.1's only change is a unit-test timeout increase (#129) | CONFIRMED | `## [3.0.1] - 2025-08-10` section reads exactly "Increased timeout on unit tests. [#129]". |
+| README.md: v3 scope-narrowing on Unicode transliteration; pkg-config/pkgconf/libtool build-dep note; `.sample`-suffix history | CONFIRMED | All three points found verbatim in `README.md`. |
+| HACKING-v1.md's `-L -v` diagnostic convention | CONFIRMED | `HACKING-v1.md:12`: "Run `detox -L -v \| head`." |
+
+Empirical vs. read-only: everything above was verified by reading source at `0a8e212` except the `--enable-year2038`/`--disable-largefile` finding, which required running `./configure --help` against the clone's pre-generated `configure` script (autoconf 2.73 was available, so this ran rather than being skipped).
