@@ -50,7 +50,13 @@ foreseeably needed for the exact dependencies proposal §7.2 already names.
 correct, because nothing in the tree uses them yet (see "What I actually
 ran" below).
 
-### The BSD-3-Clause vs. MIT/Apache-2.0 conflict
+### The BSD-3-Clause vs. MIT/Apache-2.0 conflict (resolved)
+
+**RESOLVED 2026-07-31: relicensed to dual MIT OR Apache-2.0** (owner decision).
+
+`MIT` and `Apache-2.0` are now the project's own licenses in the allow-list.
+`BSD-3-Clause` is retained for dependencies only. The analysis below is the
+state as written before that decision.
 
 `docs/rust-setup-notes.md` already flags that the repo's `LICENSE` is
 BSD-3-Clause while the guide's Rust-ecosystem convention is dual

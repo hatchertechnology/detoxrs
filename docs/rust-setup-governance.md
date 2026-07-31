@@ -56,6 +56,12 @@ Written against `wiki/rust/ideal-project-setup`'s `governance.md`,
 
 ## License conflict and its concrete consequence for `CONTRIBUTING.md`
 
+**RESOLVED 2026-07-31: relicensed to dual MIT OR Apache-2.0** (owner decision).
+
+The section below is the state as written before that decision, retained as a
+record. `CONTRIBUTING.md` has since been updated to the standard dual-license
+contribution clause, plus an explicit rule against copying upstream code.
+
 Per `docs/rust-setup-notes.md`, the repo `LICENSE` is BSD-3-Clause; the guide
 (`governance.md`) recommends the Rust-ecosystem convention of dual
 MIT/Apache-2.0. This agent did not relicense, did not add

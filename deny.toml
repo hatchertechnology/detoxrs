@@ -31,18 +31,15 @@ ignore = []
 # the dependency tree (including transitively). Every entry has a reason:
 [licenses]
 allow = [
-  # This project's own license (see /LICENSE). Must be allowed or cargo-deny
-  # would flag detoxrs-core and detoxrs themselves.
-  "BSD-3-Clause",
-  # The two licenses the house style guide (wiki/rust/ideal-project-setup)
-  # recommends as the Rust-ecosystem convention. Allowed for dependencies
-  # even though the *project's own* license is BSD-3-Clause instead of
-  # dual MIT/Apache-2.0 -- that mismatch is a separate, unresolved policy
-  # question (see docs/rust-setup-notes.md and docs/rust-setup-supply-chain.md),
-  # not a reason to reject upstream crates that use the ecosystem-standard
-  # dual license.
+  # This project's own license: dual MIT OR Apache-2.0 (see /LICENSE-MIT and
+  # /LICENSE-APACHE), the Rust-ecosystem convention. Both must be allowed or
+  # cargo-deny would flag detoxrs-core and detoxrs themselves.
   "MIT",
   "Apache-2.0",
+  # BSD-3-Clause is retained in the allow-list for dependencies only. Note the
+  # upstream C `detox` is BSD-3-Clause; this project copies none of its code,
+  # so that license does not reach us. See ACKNOWLEDGMENTS in README.md.
+  "BSD-3-Clause",
   # Unicode data/table crates (e.g. unicode-normalization, unicode-ident,
   # unicode-width -- all likely transitive dependents once
   # unicode-normalization/unicode-segmentation are added per proposal §7.2)

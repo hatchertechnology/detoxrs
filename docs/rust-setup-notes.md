@@ -30,11 +30,14 @@ Foundation-only pass: workspace scaffolding, no application logic. Written again
   crates via `[lints] workspace = true`; CI-equivalent enforcement is `-D warnings` on
   the command line (`just clippy`), not baked into the lint table, so local `cargo
 clippy` still just warns.
-- **License left untouched.** Repo `LICENSE` is BSD-3-Clause. The guide's Rust-ecosystem
-  convention is dual MIT/Apache-2.0. **Conflict, not resolved here** — `Cargo.toml`
-  declares `license = "BSD-3-Clause"` (matching the actual `LICENSE` file) rather than
-  the guide's recommendation. A human needs to decide whether to relicense or keep
-  BSD-3-Clause and simply note the ecosystem-convention deviation.
+- **License: dual MIT OR Apache-2.0.** Originally BSD-3-Clause, which conflicted with
+  the guide's Rust-ecosystem convention. **Resolved 2026-07-31 by owner decision**:
+  relicensed while the project still had a single copyright holder and no external
+  contributors, which is the only cheap moment to do it. `LICENSE` was replaced by
+  `LICENSE-MIT` + `LICENSE-APACHE` (Apache text fetched from apache.org, not
+  reproduced from memory); `Cargo.toml`, `deny.toml`, `CONTRIBUTING.md` and
+  `README.md` updated to match. Apache-2.0 is what supplies the express patent
+  grant that BSD-3-Clause lacks.
 - **Layout matches proposal §7.1 exactly**: `crates/detoxrs-core` (no I/O, no clap, no
   `std::fs`) and `crates/detoxrs` (binary). Each crate has one placeholder file
   (`lib.rs` / `main.rs`) with a `TODO` naming every module §7.1 plans, rather than an
@@ -76,7 +79,8 @@ clippy` still just warns.
   `assert_cmd`, `criterion`) are **not** added. There is no transform/plan logic yet to
   test against; adding them now would be dependencies with nothing exercising them.
 - `LICENSE-MIT` / `LICENSE-APACHE` files: not added, since the license conflict above is
-  unresolved and the existing `LICENSE` (BSD-3-Clause) was left untouched per instructions.
+  unresolved at the time. **Since resolved**: `LICENSE-MIT` and `LICENSE-APACHE` now
+  exist and `LICENSE` was removed.
 - `.cargo/config.toml`: left absent (removed an empty placeholder directory from the
   partial prior run). Nothing in scaffolding needs a cargo config override yet — no
   target-specific flags, no registry mirror, no build script. Add it when a concrete
@@ -86,9 +90,9 @@ clippy` still just warns.
 
 ## Proposal conflicts flagged (not silently resolved)
 
-- License: guide wants dual MIT/Apache-2.0; repo `LICENSE` is BSD-3-Clause. Implemented
-  per the actual `LICENSE` file (BSD-3-Clause) since changing the license is explicitly
-  out of scope for this task.
+- License: guide wanted dual MIT/Apache-2.0; repo was BSD-3-Clause. **No longer a
+  conflict** — relicensed to dual MIT OR Apache-2.0 on 2026-07-31, so the project now
+  matches the guide.
 
 ## Checklist for later agents
 
@@ -104,8 +108,7 @@ clippy` still just warns.
       independent publish per §7.1 — confirm that stays true), cross-platform binary
       builds.
 - [ ] Governance: `SECURITY.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, dual-license
-      files or a documented decision on the BSD-3-Clause vs MIT/Apache-2.0 conflict
-      above.
+      files — **done**: dual MIT OR Apache-2.0 as of 2026-07-31.
 - [ ] Dependency management: Dependabot/Renovate config once real dependencies exist.
 - [ ] Add `proptest`/`insta`/`trycmd`/`assert_cmd`/`criterion` dev-dependencies and the
       actual transform/plan modules they will test, per proposal §8 — deliberately not

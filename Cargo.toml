@@ -10,11 +10,10 @@ edition = "2024"
 # before today, 2026-07-31); 1.94.0 released 2026-03-02 (only ~5 months old,
 # too new). See docs/rust-setup-notes.md for the full derivation.
 rust-version = "1.93.0"
-# Repo LICENSE is BSD-3-Clause (left untouched per instructions). This
-# intentionally does NOT match the Rust-ecosystem convention of dual
-# MIT/Apache-2.0 that the house style guide recommends -- see
-# docs/rust-setup-notes.md for the flagged discrepancy.
-license = "BSD-3-Clause"
+# Dual MIT OR Apache-2.0, the Rust-ecosystem convention: see /LICENSE-MIT and
+# /LICENSE-APACHE. Relicensed from BSD-3-Clause on 2026-07-31 by owner
+# decision, while the project still had a single copyright holder.
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/hatchertechnology/detoxrs"
 readme = "README.md"
 keywords = ["cli", "rename", "filename", "unicode", "sanitize"]

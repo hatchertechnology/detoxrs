@@ -44,32 +44,39 @@ they drift.
 
 ## The check suite
 
-These are the recipes that exist today. There is no `just ci` or `just gate`
-alias beyond what's listed — `just gate` below **is** the full local gate;
-there is no wider aggregate recipe to reach for.
+These are the recipes that exist today. `just gate` is the fast local gate;
+`just ci` is the wider one that also runs the supply-chain tooling (and needs
+those tools installed).
 
-| Recipe                        | Command                                     | What it protects                                                |
-| ----------------------------- | ------------------------------------------- | --------------------------------------------------------------- |
-| `just build`                  | `cargo build` (workspace)                   | The workspace compiles                                          |
-| `just fmt`                    | `cargo fmt` + `prettier` on Markdown        | Formatting, fixed in place                                      |
-| `just fmt-check`              | Check-only form of `fmt`                    | Formatting, unmodified (CI-equivalent)                          |
-| `just fmt-file <files>`       | Format only the given files                 | Formatting a specific file without touching others mid-edit     |
-| `just fmt-check-file <files>` | Check-only form of `fmt-file`               | Same, without writing                                           |
-| `just clippy`                 | `cargo clippy --all-targets -- -D warnings` | Lints — `all`/`pedantic`/`nursery`, warnings promoted to errors |
-| `just test`                   | `cargo test` (workspace)                    | The test suite                                                  |
-| `just msrv`                   | Builds against the pinned MSRV toolchain    | MSRV drift from dependency or code changes                      |
-| `just gate`                   | `fmt-check`, `clippy`, `test`, `msrv`       | The full local gate — run this before opening a PR              |
+| Recipe                        | Command                                             | What it protects                                                |
+| ----------------------------- | --------------------------------------------------- | --------------------------------------------------------------- |
+| `just build`                  | `cargo build` (workspace)                           | The workspace compiles                                          |
+| `just fmt`                    | `cargo fmt` + `prettier` on Markdown                | Formatting, fixed in place                                      |
+| `just fmt-check`              | Check-only form of `fmt`                            | Formatting, unmodified (CI-equivalent)                          |
+| `just fmt-file <files>`       | Format only the given files                         | Formatting a specific file without touching others mid-edit     |
+| `just fmt-check-file <files>` | Check-only form of `fmt-file`                       | Same, without writing                                           |
+| `just clippy`                 | `cargo clippy --all-targets -- -D warnings`         | Lints — `all`/`pedantic`/`nursery`, warnings promoted to errors |
+| `just test`                   | `cargo test` (workspace)                            | The test suite                                                  |
+| `just msrv`                   | Builds against the pinned MSRV toolchain            | MSRV drift from dependency or code changes                      |
+| `just dep-budget`             | Counts direct dependencies against a cap            | The <= 11 direct-dependency budget (proposal §7.2)              |
+| `just audit`                  | `cargo audit`                                       | Known advisories in the dependency tree                         |
+| `just deny`                   | `cargo deny check`                                  | License, advisory, ban and source policy (`deny.toml`)          |
+| `just vet`                    | `cargo vet check`                                   | Dependency review status                                        |
+| `just geiger`                 | `cargo geiger -p detoxrs`                           | `unsafe` usage in the dependency tree (informational)           |
+| `just trivy`                  | `trivy fs`                                          | Vulnerability/secret/misconfig scan                             |
+| `just sbom`                   | `cargo cyclonedx`                                   | CycloneDX SBOM generation                                       |
+| `just gate`                   | `fmt-check`, `clippy`, `test`, `msrv`, `dep-budget` | The fast local gate — run this before opening a PR              |
+| `just ci`                     | `gate` + `audit`, `deny`, `vet`, `geiger`, `trivy`  | Everything, including supply chain                              |
 
-Markdown formatting is checked with `prettier`; there is currently no checker
-for anything else beyond `cargo fmt` for Rust — see `AGENTS.md` for the rule
-that a new file type gets a checker added in the same change that introduces
-it.
+`prettier` checks Markdown, YAML and JSON; `cargo fmt` checks Rust. TOML is
+deliberately unchecked (see the comment in the `justfile`). See `AGENTS.md` for
+the rule that a new file type gets a checker added in the same change that
+introduces it.
 
-There is no `just audit`/`deny`/`trivy`/`vet`/`geiger` yet. Supply-chain and
-security-scanning tooling (`cargo-deny`, `cargo-audit`, `cargo-vet`, Trivy,
-`cargo-geiger`) is not wired into this repository yet — see
-`docs/rust-setup-notes.md`'s deferred-work list. Don't reference those
-recipes as if they exist.
+The supply-chain recipes above require tools that are **not** installed by
+`rustup`: `cargo-deny`, `cargo-audit`, `cargo-vet`, `cargo-geiger`,
+`cargo-cyclonedx` and `trivy`. `just gate` deliberately excludes them so the
+common path needs nothing extra; install them before running `just ci`.
 
 ### Tool installation
 
@@ -99,9 +106,8 @@ updating both `Cargo.toml` and `docs/rust-setup-notes.md`'s derivation. Run
   workspace-wide, and `just clippy` treats warnings as errors. If a lint is
   genuinely wrong for a piece of code, `#[allow(...)]` it with a comment
   explaining why, rather than silencing it globally.
-- **Tests come with the change.** There is no test-layout convention
-  established yet beyond what ships with the workspace scaffolding (one unit
-  test in `detoxrs-core`); follow the project's testing design once real
+- **Tests come with the change.** No test-layout convention is established yet
+  beyond the workspace scaffolding (one unit test in `detoxrs-core`); follow the project's testing design once real
   logic lands (`docs/research/00-proposal-rust-detox-successor.md` §8) —
   unit tests beside the code, property tests for transform invariants,
   snapshot and CLI-driving tests for behavior.
@@ -109,10 +115,11 @@ updating both `Cargo.toml` and `docs/rust-setup-notes.md`'s derivation. Run
   files). Invalid or hostile input must degrade to a reported skip, not a
   crash — this is a hard requirement for a tool whose entire job is
   processing attacker-influenced filenames (see `SECURITY.md`).
-- **Keep the dependency tree small.** A PR adding a new dependency should
-  say why it's needed; there is no `cargo vet` policy in this repo yet to
-  formally require an entry for it, but that is a gap, not a green light —
-  don't add a dependency casually.
+- **Keep the dependency tree small.** The budget is **<= 11 direct
+  dependencies** (proposal §7.2), enforced by `just dep-budget`, because every
+  transitive crate becomes a Debian source package. A PR adding a dependency
+  must say why our own code will not do, and will need a `cargo vet` entry and
+  a `deny.toml` license check to pass.
 - Format Markdown you touch with `just fmt-check-file <path>` /
   `just fmt-file <path>` rather than the repo-wide `fmt`/`fmt-check`, to
   avoid reformatting files someone else is mid-edit on.
@@ -121,9 +128,9 @@ updating both `Cargo.toml` and `docs/rust-setup-notes.md`'s derivation. Run
 
 Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) —
 `feat:`, `fix:`, `docs:`, `chore:`, `ci:`, `refactor:`, `test:`,
-`style:` for formatting-only changes. This is required by `AGENTS.md` today;
-whether release automation consumes these prefixes to derive versions is not
-yet decided (no release tooling exists in this repo yet).
+`style:` for formatting-only changes. Required by `AGENTS.md`, and
+`release-please` parses these prefixes to derive the next version — so a
+mislabelled commit produces a wrong version bump.
 
 ## Pull requests
 
@@ -141,22 +148,41 @@ yet decided (no release tooling exists in this repo yet).
 
 ## Releases
 
-No release process exists yet — there is no version-bump automation, no
-`CHANGELOG.md`, and `detoxrs` is not published to any registry (see
-`docs/research/00-proposal-rust-detox-successor.md` §7.1: it is not intended
-for independent publish). Do not hand-edit a version field in anticipation of
-a release process that hasn't been built.
+Release automation exists but has never run. `release-please` derives versions
+from Conventional Commit prefixes (so the prefixes above are load-bearing), and
+`.github/workflows/release.yml` builds cross-platform binaries with checksums
+and SLSA provenance. It **fails closed**: nothing builds, tags or publishes
+until a maintainer creates the `release` GitHub Environment and its secrets.
+
+`detoxrs` is not published to crates.io — the binary is the product (see
+`docs/research/00-proposal-rust-detox-successor.md` §7.1). Do not hand-edit a
+version field; `release-please` owns versions and `CHANGELOG.md`. Full detail in
+`docs/rust-setup-release.md`, including a recommended future move to
+`release-plz` + `cargo-dist` before the v1.0 packaging milestone.
 
 ## Licensing of contributions
 
-The repository is licensed under **BSD-3-Clause** (see [`LICENSE`](./LICENSE)).
-By submitting a contribution, you agree it is licensed under those same
-terms, unless you state otherwise.
+This project is dual-licensed under **MIT OR Apache-2.0**, the Rust-ecosystem
+convention — see [`LICENSE-MIT`](./LICENSE-MIT) and
+[`LICENSE-APACHE`](./LICENSE-APACHE). Users may choose either license.
 
-This is a deliberate departure from the Rust-ecosystem convention of
-dual-licensing under MIT OR Apache-2.0. That convention is unresolved here —
-`docs/rust-setup-governance.md` documents the conflict and its consequences.
-If the project relicenses in the future, this section and the contribution
-terms above must be updated to match whatever `LICENSE`/`LICENSE-*` files
-exist at the time; until then, BSD-3-Clause is what you are actually agreeing
-to, not MIT/Apache-2.0.
+Unless you state otherwise, any contribution you intentionally submit for
+inclusion in this project, as defined in the Apache-2.0 license, shall be
+dual-licensed under those same two licenses, with no additional terms or
+conditions.
+
+### Do not copy code from the upstream `detox`
+
+`detoxrs` is an independent implementation, not a fork or a port. The upstream
+C `detox` is BSD-3-Clause; because we copy none of its code, that license
+imposes no obligation on this repository, and our dual MIT/Apache-2.0 licensing
+is clean.
+
+That property is easy to break by accident. Do **not** paste upstream code,
+character-translation tables, or `.tbl` data into this project. Reading the
+upstream source to understand its _behavior_ is fine and expected — the
+research in `docs/research/` does exactly that, with citations. Reproducing its
+_expression_ is not. If you believe a piece of upstream code genuinely must be
+carried over, raise it in an issue first: it requires retaining Doug Harple's
+copyright notice and the BSD-3-Clause terms, and that is a licensing decision,
+not a code-review one.
