@@ -6,7 +6,8 @@ scope: |
   Every detox input that is NOT a CLI flag, config-file directive, or table-file
   entry: configure.ac options/AC_DEFINEs, compile-time path substitution,
   environment variables, locale/encoding behavior, filesystem inputs (stat,
-  symlinks, recursion, unreadable dirs), packaging inputs (snap), bin/ scripts,
+  symlinks, recursion, unreadable dirs, and — added stage 3 — rename-failure
+  handling, signals, and concurrency), packaging inputs (snap), bin/ scripts,
   and a documentation inventory.
 read: |
   configure.ac, Makefile.am, src/Makefile.am, src/parse_options.c,
@@ -19,7 +20,20 @@ repo: https://github.com/dharple/detox
 All line-numbered links below point at commit `0a8e212` on GitHub
 (`https://github.com/dharple/detox/blob/0a8e212/<path>#L<n>`).
 
+**Relevance tags.** Each top-level section below opens with a one-line _Relevance_ tag saying
+whether it is load-bearing input for a Rust successor or an upstream-only historical record. The
+tags exist because the section order follows _upstream's_ category scheme (build / env / locale /
+filesystem / packaging / scripts / docs), which is not the order of usefulness to a reimplementation.
+Nothing was moved or dropped: every claim stays where its evidence was gathered, and "historical"
+never means "unreliable" — it means the mechanism has no Rust analogue.
+
 ## 1. Build-time inputs (`configure.ac` / `Makefile.am`)
+
+_Relevance: §1.1/§1.3 historical (autoconf machinery with no Cargo analogue). §1.2/§1.4
+**load-bearing**: compiled-in default paths with a layered runtime fallback, and which data files a
+package installs where, are decisions `detoxrs` has to make too now that it ships as a public
+package — §1.2 is the closest upstream precedent for a config/data search path, and §1.4 is the
+precedent for the `$SYSCONFDIR` vs `$DATADIR` split a distro packager will ask about._
 
 ### 1.1 `configure.ac` options
 
@@ -64,19 +78,27 @@ Fallback search order once `DATADIR`/`SYSCONFDIR` candidates fail (all hardcoded
 
 ## 2. Environment variables
 
+_Relevance: **load-bearing.** The exhaustive `getenv` inventory is the baseline for how minimal a
+successor's env-var surface can be, and establishes that there is no `LANG`/`TMPDIR` precedent to
+either match or consciously diverge from._
+
 Exhaustive — `grep -rn getenv src/` returns exactly three call sites, all shown below. No other `getenv` calls exist anywhere in `src/`.
 
-| Variable          | Read in                                                                                            | Effect                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ----------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DETOX_SEQUENCE`  | [src/parse_options.c:133](https://github.com/dharple/detox/blob/0a8e212/src/parse_options.c#L133)  | Sets the default sequence name (same slot as `-s`); read unconditionally at options-init time, before argv parsing, so `-s` on the command line overrides it later in the same function.                                                                                                                                                                                                                                      |
-| `HOME`            | [src/config_file.c:73-79](https://github.com/dharple/detox/blob/0a8e212/src/config_file.c#L73-L79) | Builds `$HOME/.detoxrc` as a config-file candidate, merged (not replacing) after the sysconfdir candidates via `parse_config_file(..., config_file, ...)` — i.e. it layers on top of system config rather than overriding it.                                                                                                                                                                                                 |
-| `XDG_CONFIG_HOME` | [src/config_file.c:81-87](https://github.com/dharple/detox/blob/0a8e212/src/config_file.c#L81-L87) | Builds `$XDG_CONFIG_HOME/detox/detoxrc` as a further config-file candidate, merged after `$HOME/.detoxrc`. **Not XDG-spec-compliant fallback**: if `XDG_CONFIG_HOME` is unset, detox does _not_ fall back to `$HOME/.config/detox/detoxrc` — it simply skips this candidate (`getenv` returns `NULL`, the `if` at line 82 is false). [UNVERIFIED-by-me-confirmed]: this is a straight read of the code, not a behavior guess. |
+| Variable          | Read in                                                                                            | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ----------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DETOX_SEQUENCE`  | [src/parse_options.c:133](https://github.com/dharple/detox/blob/0a8e212/src/parse_options.c#L133)  | Sets the default sequence name (same slot as `-s`); read unconditionally at options-init time, before argv parsing, so `-s` on the command line overrides it later in the same function.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `HOME`            | [src/config_file.c:73-79](https://github.com/dharple/detox/blob/0a8e212/src/config_file.c#L73-L79) | Builds `$HOME/.detoxrc` as a config-file candidate, merged (not replacing) after the sysconfdir candidates via `parse_config_file(..., config_file, ...)` — i.e. it layers on top of system config rather than overriding it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `XDG_CONFIG_HOME` | [src/config_file.c:81-87](https://github.com/dharple/detox/blob/0a8e212/src/config_file.c#L81-L87) | Builds `$XDG_CONFIG_HOME/detox/detoxrc` as a further config-file candidate, merged after `$HOME/.detoxrc`. **Not XDG-spec-compliant fallback**: if `XDG_CONFIG_HOME` is unset, detox does _not_ substitute the XDG-spec default path `$HOME/.config/detox/detoxrc` for it — this one candidate is skipped entirely (`getenv` returns `NULL`, the `if` at line 82 is false) and the config pipeline continues to the next step in the fixed order below. Only this candidate is lost, not the whole search; the earlier `$HOME/.detoxrc` and sysconfdir candidates are unaffected, and the built-in spoofed default still backstops everything. Verified by reading the code, not by running it. |
 
 Config-file candidates accumulate (via `parse_config_file(file, existing_config_file, ...)` merge semantics) in this fixed order: `$SYSCONFDIR/detoxrc` → `/etc/detoxrc` → `/usr/local/etc/detoxrc` → `$HOME/.detoxrc` → `$XDG_CONFIG_HOME/detox/detoxrc` → built-in spoofed default if all fail. [src/config_file.c:38-97](https://github.com/dharple/detox/blob/0a8e212/src/config_file.c#L38-L97)
 
 No `TMPDIR`, `LANG`, `LC_ALL`, `PATH`, `XDG_DATA_HOME`, or `NO_COLOR`-style variables are read anywhere in `src/`. Absence confirmed by `grep -rn getenv src/*.c` (3 hits, all above) and `grep -rln "getenv" src/` (2 files: `parse_options.c`, `config_file.c`).
 
 ## 3. Locale / encoding environment
+
+_Relevance: the locale-gated `start "<lang>"` table-block mechanism is **historical** (it dies with
+the external-table format). The negative finding — no i18n layer at all, every user-facing string a
+static English literal — is **load-bearing** and already consumed by the successor design._
 
 detox **does** call `setlocale(LC_CTYPE, "")` — exactly once, in `parse_table()`, immediately after `stat()`-ing the table file and before parsing it. [src/parse_table.c:49-52](https://github.com/dharple/detox/blob/0a8e212/src/parse_table.c#L49-L52)
 
@@ -89,6 +111,10 @@ No other locale category (`LC_COLLATE`, `LC_MESSAGES`, etc.) is set or queried a
 **Correction (stage 2):** the claim that `grep -rn "gettext\|catgets\|dgettext"` over the whole repo "returns nothing" is **false**. It returns one hit: `dgettext` at [src/config_file_yacc.c:399](https://github.com/dharple/detox/blob/0a8e212/src/config_file_yacc.c#L399), inside GNU Bison's own generated-parser boilerplate (`config_file_yacc.c` is committed to the repo, generated from `config_file_yacc.y`). Reading the surrounding code shows this is dead in this build: it's gated by `#if defined YYENABLE_NLS && YYENABLE_NLS` / `#if ENABLE_NLS` ([src/config_file_yacc.c:396-397](https://github.com/dharple/detox/blob/0a8e212/src/config_file_yacc.c#L396-L397)), and detox's `configure.ac`/`Makefile.am` never define `YYENABLE_NLS` or `ENABLE_NLS`, so the `YY_()` macro always falls through to `#define YY_(Msgid) Msgid` (plain, unlocalized). The bottom-line conclusion — detox itself has no i18n/message-catalog layer, and no reachable `gettext` call exists in the compiled binary — still holds; only the literal "returns nothing" grep claim was wrong.
 
 ## 4. Filesystem inputs
+
+_Relevance: **load-bearing throughout** — the most-reused section in this document. §4.6 was added in
+stage 3 to close the write-path/process-lifetime half of the category, which the original pass
+stopped short of._
 
 ### 4.1 What is stat'd, and how
 
@@ -116,7 +142,68 @@ If `opendir()` fails (permission denied, etc.), detox prints `"unable to parse: 
 
 `options->special` (the `-S`/`--special` long option, out of scope as a flag) is the runtime gate that makes detox operate on non-regular, non-directory filesystem objects (device nodes, FIFOs, sockets, dangling symlinks, etc.) both at the top level ([src/detox.c:107](https://github.com/dharple/detox/blob/0a8e212/src/detox.c#L107)) and during directory walks ([src/file.c:224](https://github.com/dharple/detox/blob/0a8e212/src/file.c#L224)) — the mechanism itself (what "special" means, structurally: "not S_ISDIR and not S_ISREG") is the in-scope finding.
 
+### 4.6 Write-path failure, signals, and concurrency
+
+Added in stage 3. §4.1-§4.5 cover the read side (`stat`/`lstat`/`opendir`/walk) exhaustively and stop
+there; this subsection covers the write side and process lifetime. The answers are mostly
+_absences_, which is itself the finding: a successor has no upstream precedent to match here and
+should say so rather than imply parity.
+
+**`rename(2)` failure: no errno taxonomy at all.** The rename is a single unchecked-for-kind call;
+any failure prints one generic message built from `strerror(errno)` and the walk continues with the
+next file [src/file.c:151-156](https://github.com/dharple/detox/blob/0a8e212/src/file.c#L151-L156):
+
+```c
+err = rename(old_filename, new_filename);
+if (err == -1) {
+    fprintf(stderr, "Cannot rename %s to %s: %s\n", old_filename, new_filename, strerror(errno));
+    free(new_filename);
+    return old_filename;
+}
+```
+
+There is no branch on `EROFS`, `ENOSPC`, `EACCES`, `EXDEV`, or anything else — no fast-abort on a
+read-only filesystem, no "disk full, stopping" short-circuit. A whole-tree run against a read-only
+mount emits one line per file and keeps going. The single pre-rename refusal upstream _does_ have is
+the existence/hard-link check at [src/file.c:124-140](https://github.com/dharple/detox/blob/0a8e212/src/file.c#L124-L140)
+(§4.1), which is a `lstat` comparison, not an errno case.
+
+**Exit status does not reflect rename failures.** `main()` ends with a bare `return 0`
+[src/detox.c:131](https://github.com/dharple/detox/blob/0a8e212/src/detox.c#L131); nothing between the
+walk and that line accumulates a failure flag. The only nonzero exits are pre-walk setup failures —
+argument-parse failure, "no config file to work with", "no sequence to work with"
+([src/detox.c:38-47](https://github.com/dharple/detox/blob/0a8e212/src/detox.c#L38-L47),
+[src/detox.c:73-79](https://github.com/dharple/detox/blob/0a8e212/src/detox.c#L73-L79)) — plus the
+mid-walk `EMFILE` abort (§4.4) and the fatal table-parse failure (doc 12 §1/§4). **Empirically
+confirmed**: `detox -v 'bad name!.txt'` in a `chmod 555` directory printed
+`Cannot rename bad name!.txt to bad_name.txt: Permission denied`, left the file untouched, and exited
+**0**. Same for an unstattable argument: the `lstat` failure at
+[src/detox.c:97-100](https://github.com/dharple/detox/blob/0a8e212/src/detox.c#L97-L100) prints
+`strerror` and continues. For `detoxrs` this is a behavior worth diverging from deliberately and
+saying so: a scripted batch pass cannot tell success from total failure by exit status alone.
+
+**No signal handling whatsoever.** `grep -rnE "signal|SIGINT|SIGTERM|sigaction|atexit" src/*.c src/*.h src/*.y src/*.l`
+returns **zero** hits at `0a8e212` (the only matches anywhere in the tree are SDK header paths inside
+generated `src/.deps/*.Po` dependency files, not source). So a `Ctrl-C` mid-run is the libc default:
+immediate termination, no cleanup, no summary, no in-flight-rename guard. Because each rename is a
+single atomic `rename(2)` and nothing is staged, the filesystem is never left half-written by an
+interrupt — but partial progress through the tree is neither reported nor recoverable, and there is
+no "interrupted after N of M" line.
+
+**No concurrency guard of any kind.** `grep -rnE "flock|lockf|O_EXCL|fcntl" src/*.c src/*.h src/*.y src/*.l`
+returns **zero** hits. No lock file, no advisory lock, no `O_EXCL` sentinel. Two `detox -r` runs over
+the same tree race freely; the `lstat`-then-`rename` sequence at
+[src/file.c:124-156](https://github.com/dharple/detox/blob/0a8e212/src/file.c#L124-L156) is a plain
+TOCTOU window (the existence check and the rename are separate syscalls, and upstream uses `rename`,
+not `renameat2(RENAME_NOREPLACE)`), so a concurrent creation between the two can be clobbered
+silently. This is the strongest single argument in this document for the successor's atomic-rename
+design: upstream's non-clobber guarantee is advisory, not enforced by the kernel.
+
 ## 5. Packaging inputs
+
+_Relevance: **load-bearing** for the owner's "publicly packaged" decision — this is upstream's
+distribution footprint, which directly informs which channels a successor takes on and which it
+skips._
 
 ### 5.1 `snap/snapcraft.yaml`
 
@@ -126,6 +213,10 @@ If `opendir()` fails (permission denied, etc.), detox prints `"unable to parse: 
 - No other distro packaging hints (no `debian/`, `rpm/`, `.spec`, Homebrew formula, etc.) exist in the repo. Confirmed by `ls` at repo root — only `snap/` is present as a packaging directory.
 
 ## 6. `bin/` directory
+
+_Relevance: **historical.** Generation tooling for mechanisms (external `.tbl` files, an embedded
+`detoxrc` C string) that a successor does not have. Kept as evidence that embedding defaults at build
+time is a deliberate upstream behavior, not an accident._
 
 All nine scripts are **build/release/test tooling, none are runtime-loaded or shipped in the installed binary path** (none referenced by `Makefile.am`'s `bin_PROGRAMS`/install targets, only by the `internals`/`valgrind`/dev-doc targets):
 
@@ -144,6 +235,9 @@ None of these affect a normal end-user's runtime invocation of `detox`/`inline-d
 
 ## 7. Documentation inventory
 
+_Relevance: **historical/bookkeeping.** A completeness checklist over upstream's own docs; carries no
+decision a successor inherits, but proves nothing was left unread._
+
 | File                            | Contents relevant to a successor's design                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `README.md`                     | Project overview; explicitly states v3 dropped "transliterate all of Unicode" in favor of targeting "truly problematic characters" — a scope-narrowing decision worth inheriting or deliberately revisiting. Also flags packaging-maintainer concerns: `pkg-config`/`pkgconf` and possibly `libtool` build deps, and that default config/table files are no longer `.sample`-suffixed (historical footgun for packagers). [README.md](https://github.com/dharple/detox/blob/0a8e212/README.md)                                                                                                                                                      |
@@ -161,9 +255,15 @@ No other doc files exist in the repo (`find . -iname '*.md' -o -iname '*.txt'` a
 
 ## 8. Summary of absence findings (things detox does NOT do)
 
+_Relevance: **load-bearing as a recap.** Adds no evidence of its own; every bullet points back to the
+section that gathered it._
+
 - Never _reachably_ calls `gettext`/`catgets`/any i18n message layer — all UI strings are static English (§3). One dead `dgettext` reference exists in generated Bison boilerplate (`src/config_file_yacc.c:399`) but is compiled out because `YYENABLE_NLS`/`ENABLE_NLS` are never defined (§3, corrected in stage 2).
 - Never reads `LANG`, `LC_ALL`, `LC_MESSAGES`, `LC_COLLATE`, `TMPDIR`, `PATH`, `XDG_DATA_HOME`, `NO_COLOR`, or any variable beyond the three in §2's table — confirmed by exhaustive `getenv` grep.
-- `$XDG_CONFIG_HOME` unset does **not** trigger the XDG-spec default of `$HOME/.config` — it's simply skipped (§2).
+- `$XDG_CONFIG_HOME` unset does **not** trigger the XDG-spec default of `$HOME/.config` — that one candidate is skipped and the rest of the search order proceeds normally (§2).
+- No signal handling of any kind — zero `signal`/`sigaction`/`atexit` references in `src/`; `Ctrl-C` mid-run is the libc default, with no progress summary (§4.6).
+- No concurrency guard of any kind — zero `flock`/`lockf`/`O_EXCL`/`fcntl` references in `src/`; the `lstat`-then-`rename` non-clobber check is an unenforced TOCTOU window (§4.6).
+- No errno branching on `rename(2)` failure — one generic `strerror` line per file, walk continues, and the process still exits **0** (§4.6). Exit status reflects only pre-walk setup failures, the `EMFILE` abort, and fatal table-parse failures.
 - No depth limit or symlink-loop guard in recursion — structurally unnecessary because `lstat`+`S_ISDIR` never follows a symlink-to-directory as a directory (§4.3).
 - No distro packaging manifests (deb/rpm/Homebrew) in-repo — only `snap/` (§5).
 - Snap confinement is `devmode` (unsandboxed) — never actually confined despite being packaged as a snap (§5.1).
@@ -204,3 +304,25 @@ Independent adversarial re-check against clone at `0a8e212`, read-only except wh
 | HACKING-v1.md's `-L -v` diagnostic convention                                                                                                                                                                                                                                                 | CONFIRMED                    | `HACKING-v1.md:12`: "Run `detox -L -v \| head`."                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 Empirical vs. read-only: everything above was verified by reading source at `0a8e212` except the `--enable-year2038`/`--disable-largefile` finding, which required running `./configure --help` against the clone's pre-generated `configure` script (autoconf 2.73 was available, so this ran rather than being skipped).
+
+## Review record (stage 3)
+
+Three independent reviewers (L1 source fidelity + empirical, L2 completeness and downstream
+usefulness, L3 link/structure/absence-claim integrity). Each finding was re-verified by this
+adjudicator against the pinned clone `0a8e212` before being accepted.
+
+| Finding (reviewer)                                                                                                                                                                                                                                                                                    | Verdict                                | Action or reason                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **L1.** All five absence claims (`getenv` ×3, `setlocale` ×1, `gettext` family, unread env vars, `LC_` scope) re-grepped independently from scratch; every count and file:line matched the document exactly. 0 CRITICAL, 0 MAJOR, 0 fabrications, 0 omissions.                                        | **ACCEPTED**                           | **This document came out clean and the clean result is the finding.** No text changed on account of it. Spot-verified independently here (`grep -rn getenv src/` → 3; `grep -rn setlocale src/` → 1 call + 1 comment). No findings were manufactured to balance the ledger against doc 12.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **L3.** All eight absence claims carry reproducible evidence (named grep commands, scopes, file paths); permalinks 0 failures; validation-log entries all resolve; hedging explicit and consistent.                                                                                                   | **ACCEPTED**                           | Agreed, and re-run locally as a spot audit: every source permalink in this document resolves against the clone with the right commit prefix and in-bounds line ranges. Recorded, no text change.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **L2 MAJOR (F2).** §4 covers read/stat/walk exhaustively but never covers `rename(2)`-failure errno taxonomy, signal handling, or concurrent invocation — a gap that forced doc 00 §5.8 to be invented with no upstream baseline.                                                                     | **ACCEPTED**                           | The real gap in this document, and it was answerable cheaply, exactly as L2 argued. New **§4.6 "Write-path failure, signals, and concurrency"** records what upstream actually does, which is mostly nothing, stated as explicit grepped absences: **zero** `signal`/`sigaction`/`atexit` hits and **zero** `flock`/`lockf`/`O_EXCL`/`fcntl` hits across `src/*.c`/`*.h`/`*.y`/`*.l` (the only tree-wide matches are SDK header paths inside generated `src/.deps/*.Po` files); `rename(2)` failure handled by one generic `strerror` line with no errno branching at `src/file.c:151-156`. Front-matter `scope:` line widened to match.                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **L2 F2, additional finding not in any review**: exit status.                                                                                                                                                                                                                                         | **ADDED**                              | While closing F2 the adjudicator found something none of the three reviewers raised and doc 00 will want: `main()` ends in a bare `return 0` (`src/detox.c:131`) with no failure accumulator, so **rename failures do not affect the exit code**. **Reproduced empirically**: `detox -v 'bad name!.txt'` inside a `chmod 555` directory printed `Cannot rename …: Permission denied`, left the file untouched, and exited **0**. Nonzero exits come only from pre-walk setup failures, the `EMFILE` abort, and fatal table-parse failures. Recorded in §4.6 and §8.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **L2 MINOR.** Organization: sections mix load-bearing (§2, §4, §5) with purely historical (§1, §6, §7) content under upstream's own category scheme; only 3 of 8 sections are ever cited downstream. L2 recommended splitting the document into two parts, or at minimum a relevance tag per section. | **MODIFIED**                           | The two-part **split is rejected**; the **relevance tags are accepted** and implemented (one line under each of §1-§8). Reasons: (a) a split relabels §1.2/§1.4 as historical, and they are not — now that this is a publicly packaged tool, upstream's compiled-in default paths, layered runtime fallback, and `$SYSCONFDIR`/`$DATADIR` install split are genuine input, and the §1 tag says so explicitly rather than burying them under "historical build-system record"; (b) the reordering would separate claims from the section whose method gathered them, weakening the audit trail that both other reviewers just verified section-by-section; (c) L2 itself scored the split as gaining "nothing evidentiary". **What is lost by tagging rather than splitting:** a reader still has to scroll past `--with-coverage` and `bin/generate-pdf.sh` to reach the filesystem section, and there is still no single "start here" list of load-bearing facts. The tags convert that from a discovery problem into a skimming one, which is the cheapest fix that keeps the evidence structure intact. |
+| **L3 MINOR.** Line ~73: "does not fall back to `$HOME/.config/detox/detoxrc`" is ambiguous between "this candidate is skipped" and "the config search gives up".                                                                                                                                      | **ACCEPTED**                           | Rewritten to say that only this one candidate is skipped, the fixed search order continues to the next step, earlier candidates are unaffected, and the built-in spoofed default still backstops. The contradictory `[UNVERIFIED-by-me-confirmed]` marker L3 flagged as semantically unclear is replaced with plain language: "Verified by reading the code, not by running it." §8's matching bullet was tightened the same way.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| **L2 (§6).** Neither doc 12 nor doc 13 answers what a distro package implies for `detoxrs` given it ships no config or table files.                                                                                                                                                                   | **REJECTED** (for this document)       | Correctly identified as out of both documents' scope by L2's own framing. This document's job is to record upstream's packaging footprint, which §1.2/§1.4/§5 do; deciding `detoxrs`'s package layout is a doc 00 §9.4 question. Forwarded, not answered here.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **L2 CRITICAL (F1).** Doc 00 still specifies an active CP1252 legacy-encoding-repair pipeline stage that `owner-decisions.md` drops from v1.0.                                                                                                                                                        | **OUT OF SCOPE — verified and queued** | Confirmed real by read-only inspection of doc 00; **not** a doc 13 finding and **not** edited here. The full list of required doc 00 changes is recorded in doc 12's stage-3 review record so it lives in one place.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+
+Empirical method (stage 3): read-only source verification for the grep-based absences, plus two runs
+of the prebuilt `detox` from the pinned clone in a scratch directory outside the repo and clone — the
+read-only-directory rename-failure/exit-code test, and confirmation that an unstattable argument
+likewise prints and continues.
