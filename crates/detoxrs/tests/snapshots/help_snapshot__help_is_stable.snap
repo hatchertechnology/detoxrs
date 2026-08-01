@@ -1,0 +1,54 @@
+---
+source: crates/detoxrs/tests/help_snapshot.rs
+expression: "String::from_utf8(out.stdout).expect(\"help is UTF-8\")"
+---
+Make filenames sane: unix-safe, portable, readable. Preview by default.
+
+Usage: detoxrs [OPTIONS] <PATH>...
+
+Arguments:
+  <PATH>...
+          Files and/or directories to clean
+
+Options:
+  -x, --exec
+          Perform the renames (not implemented in this build)
+
+  -n, --dry-run
+          Preview only; explicit form of the default
+
+  -r, --recursive
+          Descend into directories; without it, a directory argument has only its own name cleaned
+
+      --on-collision <POLICY>
+          What to do when two names want the same destination
+
+          Possible values:
+          - number: Insert `-N` before the extension, smallest free `N >= 2`
+          - skip:   Leave every colliding entry alone and report it
+          - fail:   Refuse the entire batch
+          
+          [default: number]
+
+  -v, --verbose...
+          List unchanged entries too
+
+  -q, --quiet
+          Errors only
+
+      --json
+          JSON on stdout, diagnostics on stderr
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+
+Nothing is renamed unless you pass -x. This build previews only: -x is parsed but refused, because no write path exists in it yet.
+
+Without -r, a directory argument has only its own name cleaned and nothing inside it is touched (detox differs).
+
+Exit codes:
+  0  preview produced with no errors
+  2  usage, walk, or plan error

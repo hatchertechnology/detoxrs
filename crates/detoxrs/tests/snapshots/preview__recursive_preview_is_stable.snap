@@ -1,0 +1,17 @@
+---
+source: crates/detoxrs/tests/preview.rs
+expression: "stdout_of(detoxrs(t.path()).args([\"-r\", \"-v\", \".\"]))"
+---
+./nested dir
+  inner file.txt  ->  inner_file.txt
+.
+  IMG 0042.JPG       ->  IMG_0042-2.JPG
+  IMG_0042.JPG       =   (unchanged)
+  Screen Shot.png    ->  Screen_Shot.png
+  already_clean.txt  =   (unchanged)
+  dir link           ->  dir_link [symlink]
+  link name.txt      ->  link_name.txt [symlink]
+  nested dir/        ->  nested_dir/
+
+6 to rename, 2 unchanged, 0 skipped, 0 conflicts.
+Nothing was changed. This build previews only; applying is not implemented yet.

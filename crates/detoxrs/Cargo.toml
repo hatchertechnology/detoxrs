@@ -15,3 +15,14 @@ workspace = true
 
 [dependencies]
 detoxrs-core = { path = "../detoxrs-core", version = "0.1.0" }
+clap = { workspace = true }
+walkdir = { workspace = true }
+serde_json = { workspace = true }
+
+# Versions inline, not workspace-inherited: see the note in the workspace
+# Cargo.toml. `just dep-budget` counts a `[workspace.dependencies]` entry
+# against the runtime budget even when only a dev-dependency inherits it.
+[dev-dependencies]
+assert_cmd = "2"
+insta = "1"
+tempfile = "3"

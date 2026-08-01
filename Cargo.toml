@@ -27,6 +27,14 @@ categories = ["command-line-utilities", "filesystem"]
 unicode-normalization = "0.1"
 # Stage 12's grapheme-cluster boundaries. Runtime dependency 2.
 unicode-segmentation = "1"
+# The CLI surface (plan §7.3). Runtime dependency 3, binary crate only.
+clap = { version = "4", features = ["derive"] }
+# The snapshot walk (§5.1). `follow_links(false)` is §5.6's symlink
+# non-descent. Runtime dependency 4.
+walkdir = "2"
+# `--json`, and later the journal. Hand-escaping path-derived data into JSON is
+# exactly the bug class this budget slot exists to buy off. Runtime dependency 5.
+serde_json = "1"
 # Dev-dependencies deliberately do NOT live here. `just dep-budget` harvests
 # `[workspace.dependencies]` as a whole and cannot tell which entries are only
 # ever inherited into a `[dev-dependencies]` table, so a `proptest` line here
