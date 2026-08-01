@@ -35,7 +35,7 @@ Followed `supply-chain.md`'s template section-for-section: `[graph]`,
 
 | License        | Why allowed                                                                                                                                                                                                                                                                                          |
 | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BSD-3-Clause` | **This project's own license** (see `/LICENSE`). Without this entry, `cargo deny check licenses` would flag `detoxrs-core` and `detoxrs` themselves — cargo-deny checks the whole tree, including workspace members.                                                                                 |
+| `BSD-3-Clause` | **This project's own license** (see `/LICENSE-MIT` and `/LICENSE-APACHE`). Without this entry, `cargo deny check licenses` would flag `detoxrs-core` and `detoxrs` themselves — cargo-deny checks the whole tree, including workspace members.                                                       |
 | `MIT`          | Guide's baseline recommendation; the most common permissive license on crates.io.                                                                                                                                                                                                                    |
 | `Apache-2.0`   | Guide's baseline recommendation; frequently dual-licensed with MIT (`MIT OR Apache-2.0`), and adds an explicit patent grant MIT lacks.                                                                                                                                                               |
 | `Unicode-3.0`  | Covers Unicode data/table crates. Directly relevant here: proposal §7.2 plans `unicode-normalization` and `unicode-segmentation` as direct dependencies, and crates like `unicode-ident`/`unicode-width` commonly appear transitively (e.g. via `syn`, itself pulled in by `clap`'s derive feature). |
@@ -171,7 +171,12 @@ parse error, not guessed.
 Installed via `cargo install cargo-geiger --locked` and ran for real:
 `cargo geiger` refuses to run against the workspace root because it's a
 virtual manifest (no `[package]` section) — it needs `-p <crate>` or to be
-run from inside a crate directory. Ran `cargo geiger -p detoxrs` from the
+run from inside a crate directory. **Correction (stage 3):** `-p` does NOT
+work against a virtual manifest either — verified 2026-07-31, it errors with
+"is a virtual manifest, but this command requires running against an actual
+package". The working invocation needs an absolute `--manifest-path`; a
+relative one is also rejected. `just geiger` and `security.yml` now use
+`--manifest-path <abs>/crates/detoxrs/Cargo.toml`. Originally ran `cargo geiger -p detoxrs` from the
 workspace root; output:
 
 ```
@@ -188,7 +193,7 @@ correct, if minor, distinction: `deny` is a _default_ that a later
 `#[allow(unsafe_code)]` can override in a specific block (which is exactly
 why `docs/rust-setup-notes.md` chose `deny` over `forbid` for the binary
 crate — it plans a scoped, reviewed `unsafe` FFI shim). Wired into
-`security.yml` as `cargo geiger -p detoxrs || true` — never gates the build,
+`security.yml` as `cargo geiger --manifest-path <abs>/crates/detoxrs/Cargo.toml || true` — never gates the build,
 per the guide.
 
 ## Trivy
@@ -248,7 +253,7 @@ _workflow files_ rather than jobs in one file, since I don't own `ci.yml`
 and didn't want to merge into it:
 
 - **`security.yml`** — `security` job: `cargo audit`, `cargo deny check`,
-  Trivy, `cargo geiger -p detoxrs || true`. Triggers: push to `main`, PR,
+  Trivy, `cargo geiger --manifest-path <abs> || true`. Triggers: push to `main`, PR,
   and a weekly cron (`0 6 * * 1`) per `ci-cd.md`'s "Evidence retention and
   scheduled checks" — a RustSec advisory can appear against an unchanged
   `Cargo.lock` with nothing else happening in the repo that week.
@@ -311,7 +316,7 @@ trivy:
 # Informational only -- see security-scanning.md and the cargo-geiger
 # section above for why this ignores its exit code.
 geiger:
-    -cargo geiger -p detoxrs
+    -cargo geiger --manifest-path <abs>/crates/detoxrs/Cargo.toml
 
 vet:
     cargo vet check
@@ -345,7 +350,7 @@ in the same change that reconciles this.
   dependencies (both workspace-internal), reported nothing.
 - `cargo vet check` — installed via `cargo install cargo-vet --locked`.
   `Vetting Succeeded (because you have no third-party dependencies)`.
-- `cargo geiger -p detoxrs` — installed via `cargo install cargo-geiger
+- `cargo geiger --manifest-path <abs>` — installed via `cargo install cargo-geiger
 --locked`. Output shown above; `detoxrs-core` `:)`, `detoxrs` `?`, zero
   unsafe usage either way.
 - `trivy fs --scanners vuln,secret --exit-code 1 --skip-dirs target .` —

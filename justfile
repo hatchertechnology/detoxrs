@@ -75,9 +75,10 @@ deny:
 vet:
     cargo vet check
 
-# Report unsafe usage in the dependency tree (cargo-geiger; -p, since the manifest is virtual)
+# Report unsafe usage in the dependency tree (cargo-geiger; needs an absolute
+# --manifest-path: it refuses both a virtual manifest and a relative path)
 geiger:
-    cargo geiger -p detoxrs
+    cargo geiger --manifest-path "{{ justfile_directory() }}/crates/detoxrs/Cargo.toml"
 
 # Filesystem vulnerability/secret scan (trivy)
 trivy:

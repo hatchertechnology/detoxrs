@@ -41,7 +41,17 @@ queries_run:
   - "detox filenames alias .bashrc script wrapper \"detox -r\""
   - "debian-user mailing list detox filenames"
   - "detox package Debian bug report rename filenames"
-source_count: 11 substantively-fetched/verified sources (plus dead-end venues documented below)
+source_count: >
+  11 pages fetched and read directly, itemized: 6 that yielded cited evidence
+  (Arch BBS 2009, Arch BBS 2005, apt-upgrade.me, Lobste.rs, Linux.org, Mabox
+  forum) and 5 fetched specifically to confirm a negative result (an openSUSE
+  Tumbleweed thread and a dev.to listicle, both search false positives with no
+  detox mention; putorius.net and delightlylinux.wordpress.com, checked for
+  reader comments and found to have none; and the HN threads Algolia pointed at,
+  where the attributed comments were not present). Plus blocked/offline venues
+  documented below (linuxquestions.org 403, ubuntuforums.org DNS failure,
+  narkive.com 503), from which nothing is quoted.
+
 ---
 
 # `detox` — online community discussion research
@@ -241,9 +251,9 @@ sanitize filenames`, 2016-11-11; `detox 2 - I'm back`; `bash detox html referenc
   OCR pipelines was found.
 - **DEV Community ("dev.to")**: one plausible "poor man's CLI tools" listicle with comments was
   fetched directly; confirmed it does not mention detox anywhere in the article or comments.
-- **Comment sections on tutorial blogs**: fetched three of the most common detox how-to articles
+- **Comment sections on tutorial blogs**: fetched two of the most common detox how-to articles
   directly (putorius.net, delightlylinux.wordpress.com) specifically to check for reader comments
-  beyond the article text. None had any comments at fetch time.
+  beyond the article text. Neither had any comments at fetch time.
 
 ## Method notes / caveats
 
@@ -261,3 +271,20 @@ sanitize filenames`, 2016-11-11; `detox 2 - I'm back`; `bash detox html referenc
   source that was either fetched directly (Arch BBS ×2, apt-upgrade.me, Lobste.rs, Linux.org,
   Mabox, opensuse forum false-positive check, dev.to false-positive check) and reproduced verbatim
   as returned by that fetch, or explicitly flagged as unverified/snippet-only.
+
+---
+
+## Review record (stage 3)
+
+Adjudication of the three stage-3 reviews (L1 link verification, L2 evidential honesty, L3
+structure). Rejections are included with reasons.
+
+| Finding (reviewer)                                                                                                                                                                                             | Verdict               | Action or reason                                                                                                                                                                                                                                                                                                       |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| All 6 cited links in this document resolve 200; 3 of the load-bearing claims here (Arch BBS 2009 commands, Arch BBS 2005 reversal quote, Lobste.rs library comment) were re-fetched and verified verbatim (L1) | **Accept, no change** | Confirmed. Nothing to fix.                                                                                                                                                                                                                                                                                             |
+| No overstatement found in this document; the data-loss dry hole (§"Sharp edges search") is correctly left as a null result rather than converted into "detox never destroys data" (L2)                         | **Accept, no change** | This is the behavior the corpus wants. Explicitly preserved — see the next row, where doc 22 had violated it.                                                                                                                                                                                                          |
+| Doc 22 asserted users "run detox without preview, and lose data", contradicting this document's explicit dry hole (L2, CRITICAL)                                                                               | **Accept**            | Fixed in doc 22, not here. This document was correct and is now cited by doc 22's retraction as the authority for the null result.                                                                                                                                                                                     |
+| Front matter should use the same field names and a body-verifiable source count as docs 21/23 (L3)                                                                                                             | **Accept**            | Field names already matched (`venue_scope`, `queries_run`, `source_count`). The count "11" was unverifiable as written, so it is now itemized: 6 sources yielding cited evidence + 5 fetched to confirm a negative, with the blocked/offline venues listed separately.                                                 |
+| Internal inconsistency found during adjudication, not by any reviewer                                                                                                                                          | **Accept**            | §"Searches that found nothing" said "fetched three of the most common detox how-to articles" but named only two (putorius.net, delightlylinux). Corrected to two.                                                                                                                                                      |
+| Final sentence ("No fabricated URLs, quotes, or usernames are included above...") reads as defensive; move to an appendix or delete (L3, MINOR)                                                                | **Reject**            | This is a provenance attestation, not clutter. In a corpus where the reviewers' single most valuable finding was that no quotes were fabricated, the sentence that itemizes which sources were fetched directly and which are flagged unverified is load-bearing. Deleting it removes accountability to save one line. |
+| This document is not redundant with the synthesis and should be kept as a primary source (L3)                                                                                                                  | **Accept, no change** | Agreed on the reasoning given: the verbatim exchanges (the Arch BBS skeptic reversing on accented filenames) and the itemized negative results are what let a reader judge signal against noise. The synthesis abstracts them away by design and cannot substitute.                                                    |

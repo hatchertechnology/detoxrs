@@ -170,7 +170,7 @@ jobs:
           STAGE="detoxrs-${VERSION}-${TARGET}"
           mkdir -p "$STAGE"
           cp "target/${TARGET}/release/detoxrs" "$STAGE/"
-          cp README.md LICENSE "$STAGE/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$STAGE/"
           tar -czf "${STAGE}.tar.gz" "$STAGE"
         shell: bash
         env:
@@ -184,7 +184,7 @@ jobs:
           $STAGE = "detoxrs-$VERSION-${env:TARGET}"
           New-Item -ItemType Directory -Path $STAGE | Out-Null
           Copy-Item "target/${env:TARGET}/release/detoxrs.exe" -Destination $STAGE
-          Copy-Item README.md,LICENSE -Destination $STAGE
+          Copy-Item README.md,LICENSE-MIT,LICENSE-APACHE -Destination $STAGE
           Compress-Archive -Path $STAGE -DestinationPath "$STAGE.zip"
         shell: pwsh
         env:

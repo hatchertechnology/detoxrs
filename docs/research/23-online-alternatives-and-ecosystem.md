@@ -28,14 +28,14 @@ queries_run:
   - "site:repology.org f2 rnr brename detox packaging"
   - "edir vidir Python file rename dry-run undo"
   - "bulk rename batch rename tools comparison 2025 2026"
-source_count: 26 fetched pages + 26 search queries
+source_count: 26 cited sources from 26 search queries — 24 fetched and read directly, 2 blocked to automated fetch and used only via search snippets (alternativeto.net 403, linux-audit.com 406; both re-verified 2026-07-31 and flagged inline)
 ---
 
 ## Executive Summary
 
 **Detox status**: Archived as of July 12, 2026; maintainer placed project on indefinite hold due to time constraints. The codebase is C-based and acknowledged as needing modernization, particularly in configuration and UX.
 
-**Competitive landscape**: At least 15 active CLI alternatives exist, each with different design choices on dry-run defaults, collision handling, and undo support. No single dominant replacement; choice depends on workflow (editor-based vs. pattern-based, UTF-8 vs. encoding conversion).
+**Competitive landscape**: 14 alternatives were surveyed — **11 CLI tools** (f2, rnr, brename, mmv, convmv, Perl `rename`, qmv, zmv, nomino, edir, vidir), 2 Windows GUI tools (PowerRename, Advanced Renamer), and 1 library (`sanitize-filename`). They differ on dry-run defaults, collision handling, and undo support. No single dominant replacement; choice depends on workflow (editor-based vs. pattern-based, UTF-8 vs. encoding conversion). "Surveyed" here means each tool's own documentation was read — it is not a claim about relative popularity.
 
 **Packaging**: Detox shipped across Debian (versions 11–current), Alpine, Homebrew, MacPorts, and others. Versions range from 1.3.3 to 3.0.1. No evidence of abandonment flags in package managers despite archived GitHub repo.
 
@@ -45,23 +45,23 @@ source_count: 26 fetched pages + 26 search queries
 
 Tools with direct evidence from documentation or README. Cells marked "unknown" indicate no evidence found in fetched sources.
 
-| Tool                                                                                          | Dry-Run Default            | Collision Handling                      | Undo Support       | Non-UTF-8 Support                                 | Config File   | Last Release                                               |
-| --------------------------------------------------------------------------------------------- | -------------------------- | --------------------------------------- | ------------------ | ------------------------------------------------- | ------------- | ---------------------------------------------------------- |
-| [detox](https://github.com/dharple/detox)                                                     | `-n` flag                  | Unknown                                 | Unknown            | Yes (ISO-8859-1, CP-1252)                         | YAML config   | 3.0.1 (Debian); archived 2026-07-12                        |
-| [f2](https://github.com/ayoisaiah/f2)                                                         | Yes, preview default       | `--fix-conflicts` auto-resolve          | Explicit undo      | UTF-8                                             | CLI args only | [v2.2.2+](https://github.com/ayoisaiah/f2/releases)        |
-| [rnr](https://github.com/ismaelgv/rnr)                                                        | Yes, `-n` default          | Collision detection prevents overwrites | Dump-file undo     | ASCII conversion option                           | None stated   | [Active](https://github.com/ismaelgv/rnr)                  |
-| [brename](https://github.com/shenwei356/brename)                                              | `-d` flag for dry-run      | `-w`/`-W` flags for conflict handling   | `-u`/`-U` flags    | UTF-8                                             | None stated   | [v2.13.0+](https://github.com/shenwei356/brename/releases) |
-| [mmv](https://www.systutorials.com/docs/linux/man/1-mmv/)                                     | `-n` preview flag          | Collision detection & abort             | Unknown            | Unknown                                           | None          | Unix classic (all distros)                                 |
-| [convmv](https://www.j3e.de/linux/convmv/man/)                                                | Yes, `--notest` to apply   | `--replace` for identical files         | Reverse conversion | **Specialized**: UTF-8, Latin-1, IMAP-UTF-7, etc. | None          | [2.05+](https://www.j3e.de/linux/convmv/)                  |
-| [rename/prename (Perl)](https://linuxcommandlibrary.com/man/prename)                          | `-n` dry-run flag          | `-f` force; default: don't overwrite    | Unknown            | UTF-8                                             | None          | Perl core                                                  |
-| [qmv](https://www.nongnu.org/renameutils/)                                                    | Edit-based (interactive)   | Unknown                                 | Unknown            | Unknown                                           | None          | [3.1+](https://www.nongnu.org/renameutils/)                |
-| [zmv (Zsh)](https://zsh.sourceforge.io/Doc/Release/User-Contributions.html#Utility-Functions) | `-n` preview               | Unknown                                 | Unknown            | UTF-8                                             | None          | Zsh built-in                                               |
-| [nomino](https://github.com/yaa110/nomino)                                                    | `--test` / `--dry-run`     | Prepend `_` on collision; `--overwrite` | JSON map for redo  | UTF-8                                             | None          | [2.x+](https://github.com/yaa110/nomino/releases)          |
-| [edir](https://github.com/bulletmark/edir)                                                    | `-i/--interactive` preview | `a~`, `a~1`... collision scheme         | No explicit undo   | UTF-8                                             | None          | [2.36+](https://pypi.org/project/edir/)                    |
-| [vidir](https://linux.die.net/man/1/vidir)                                                    | Interactive editor         | Unknown                                 | Unknown            | UTF-8                                             | None          | moreutils classic                                          |
-| [PowerRename](https://learn.microsoft.com/en-us/windows/powertoys/powerrename)                | Live preview               | Unknown                                 | Ctrl+Z (OS-level)  | UTF-8                                             | None          | Windows PowerToys                                          |
-| [Advanced Renamer](https://www.advancedrenamer.com/user_guide/v4/complete_guide)              | Preview before apply       | Configurable rules (fail/ignore/append) | Undo window        | UTF-8                                             | GUI config    | [4.23.0](https://www.advancedrenamer.com/) (May 2026)      |
-| [sanitize-filename (npm)](https://github.com/parshap/node-sanitize-filename)                  | N/A (library)              | N/A                                     | N/A                | UTF-8 truncation-safe                             | None          | [1.6.4](https://www.npmjs.com/package/sanitize-filename)   |
+| Tool                                                                                          | Dry-Run Default            | Collision Handling                                                                                        | Undo Support       | Non-UTF-8 Support                                 | Config File                                                       | Last Release                                               |
+| --------------------------------------------------------------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------ | ------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------- |
+| [detox](https://github.com/dharple/detox)                                                     | `-n` flag                  | Declines the rename if the target name already exists (per upstream docs; no user-verified account found) | None               | Yes (ISO-8859-1, CP-1252)                         | `detoxrc` — custom sequence/filter syntax, **not** YAML/TOML/JSON | 3.0.1 (Debian); archived 2026-07-12                        |
+| [f2](https://github.com/ayoisaiah/f2)                                                         | Yes, preview default       | `--fix-conflicts` auto-resolve                                                                            | Explicit undo      | UTF-8                                             | CLI args only                                                     | [v2.2.2+](https://github.com/ayoisaiah/f2/releases)        |
+| [rnr](https://github.com/ismaelgv/rnr)                                                        | Yes, `-n` default          | Collision detection prevents overwrites                                                                   | Dump-file undo     | ASCII conversion option                           | None stated                                                       | [Active](https://github.com/ismaelgv/rnr)                  |
+| [brename](https://github.com/shenwei356/brename)                                              | `-d` flag for dry-run      | `-w`/`-W` flags for conflict handling                                                                     | `-u`/`-U` flags    | UTF-8                                             | None stated                                                       | [v2.13.0+](https://github.com/shenwei356/brename/releases) |
+| [mmv](https://www.systutorials.com/docs/linux/man/1-mmv/)                                     | `-n` preview flag          | Collision detection & abort                                                                               | Unknown            | Unknown                                           | None                                                              | Unix classic (all distros)                                 |
+| [convmv](https://www.j3e.de/linux/convmv/man/)                                                | Yes, `--notest` to apply   | `--replace` for identical files                                                                           | Reverse conversion | **Specialized**: UTF-8, Latin-1, IMAP-UTF-7, etc. | None                                                              | [2.05+](https://www.j3e.de/linux/convmv/)                  |
+| [rename/prename (Perl)](https://linuxcommandlibrary.com/man/prename)                          | `-n` dry-run flag          | `-f` force; default: don't overwrite                                                                      | Unknown            | UTF-8                                             | None                                                              | Perl core                                                  |
+| [qmv](https://www.nongnu.org/renameutils/)                                                    | Edit-based (interactive)   | Unknown                                                                                                   | Unknown            | Unknown                                           | None                                                              | [3.1+](https://www.nongnu.org/renameutils/)                |
+| [zmv (Zsh)](https://zsh.sourceforge.io/Doc/Release/User-Contributions.html#Utility-Functions) | `-n` preview               | Unknown                                                                                                   | Unknown            | UTF-8                                             | None                                                              | Zsh built-in                                               |
+| [nomino](https://github.com/yaa110/nomino)                                                    | `--test` / `--dry-run`     | Prepend `_` on collision; `--overwrite`                                                                   | JSON map for redo  | UTF-8                                             | None                                                              | [2.x+](https://github.com/yaa110/nomino/releases)          |
+| [edir](https://github.com/bulletmark/edir)                                                    | `-i/--interactive` preview | `a~`, `a~1`... collision scheme                                                                           | No explicit undo   | UTF-8                                             | None                                                              | [2.36+](https://pypi.org/project/edir/)                    |
+| [vidir](https://linux.die.net/man/1/vidir)                                                    | Interactive editor         | Unknown                                                                                                   | Unknown            | UTF-8                                             | None                                                              | moreutils classic                                          |
+| [PowerRename](https://learn.microsoft.com/en-us/windows/powertoys/powerrename)                | Live preview               | Unknown                                                                                                   | Ctrl+Z (OS-level)  | UTF-8                                             | None                                                              | Windows PowerToys                                          |
+| [Advanced Renamer](https://www.advancedrenamer.com/user_guide/v4/complete_guide)              | Preview before apply       | Configurable rules (fail/ignore/append)                                                                   | Undo window        | UTF-8                                             | GUI config                                                        | [4.23.0](https://www.advancedrenamer.com/) (May 2026)      |
+| [sanitize-filename (npm)](https://github.com/parshap/node-sanitize-filename)                  | N/A (library)              | N/A                                                                                                       | N/A                | UTF-8 truncation-safe                             | None                                                              | [1.6.4](https://www.npmjs.com/package/sanitize-filename)   |
 
 ---
 
@@ -81,16 +81,27 @@ Tools with direct evidence from documentation or README. Cells marked "unknown" 
 
 ---
 
-## Why Users Switch Away from Detox
+## Candidate alternatives (no switch-rationale evidence found)
+
+This section was previously titled "Why Users Switch Away from Detox." That heading was
+unsupportable: **no source in this research documents a single user's reason for switching away
+from detox.** What exists is (a) the maintainer's own statement of the tool's limitations, and
+(b) directory listings of what else does a similar job. Renamed accordingly.
 
 **Key limitation stated by maintainer** ([dharple/detox README](https://github.com/dharple/detox)):
 
 > "Users shouldn't need to be well-versed in character encoding, and detox needs to be easier to work with using command-line options and a config file."
 
-**Direct alternatives cited**:
+**Directory listings of alternatives**:
 
-- [AlternativeTo lists F2 as primary detox replacement](https://alternativeto.net/software/detox) (12 user endorsements)
-- Reasons: safety defaults (dry-run), undo support, modern UX
+- [AlternativeTo's detox page](https://alternativeto.net/software/detox) lists F2 among detox
+  alternatives. **The page returns HTTP 403 to automated fetches (re-verified 2026-07-31), so
+  nothing on it was read directly.** An earlier revision of this document stated "12 user
+  endorsements" as fact; that figure came from a search snippet, could not be verified, and is
+  withdrawn. No endorsement count should be relied on. Doc 23's own findings below note the same
+  page carries no user comments explaining a switch.
+- Feature axes on which the newer tools differ from detox (from each tool's own docs, not from
+  users): dry-run defaults, undo support, config/UX surface.
 
 **Design comparisons from Awesome-Rename-Tools** ([GitHub ugzv/Awesome-Rename-Tools](https://github.com/ugzv/Awesome-Rename-Tools)):
 
@@ -133,7 +144,16 @@ Tools with direct evidence from documentation or README. Cells marked "unknown" 
 
 **Detox specialty**: Translates ISO-8859-1 and CP-1252 to UTF-8; designed for legacy encoding messes.
 
-**convmv specialty**: Converts _between_ any charset pair (UTF-8, Latin-1, CP-1252, IMAP-UTF-7, etc.). Includes `--fixdouble` for double-encoded UTF-8.
+**convmv specialty — this is the tool to point users at for mis-encoded names.** `convmv`
+converts a _filename's_ character encoding between any charset pair (UTF-8, Latin-1, CP-1252,
+IMAP-UTF-7, and others) with `-f FROM -t TO`. It changes only the name, never file contents. It
+runs in **test mode by default** and requires `--notest` to actually apply changes; `-r` recurses;
+`--fixdouble` repairs double-encoded UTF-8; `--replace` opts into overwriting an identical target.
+Per its man page (fetched) it is packaged nearly everywhere and remains the standard answer for
+legacy-encoding repair. This matters for a successor that declines to repair encodings itself:
+"skip the name and report it, and tell the user to run `convmv`" is a complete, real answer, and
+the Arch BBS 2009 thread in doc 20 shows a user doing exactly that sequence (`convmv` first, then
+detox for character cleanup).
 
 **Modern CLI tools** (f2, rnr, brename, nomino): UTF-8 native; assume input is valid UTF-8.
 
@@ -144,7 +164,9 @@ Tools with direct evidence from documentation or README. Cells marked "unknown" 
 ## Evidence: No Active Community Response to Detox Archival
 
 - No Hacker News discussion dedicated to detox's maintenance status.
-- AlternativeTo page for detox lists F2 but contains no user comments explaining switch rationale.
+- AlternativeTo page for detox lists F2 but no user comment explaining a switch rationale was
+  found. **Caveat: the page returns 403 to automated fetches (re-verified 2026-07-31), so this is
+  an absence-of-evidence from search snippets, not a page read directly.**
 - detox-php fork exists (GitHub: dharple/detox-php); not evidence of active succession—appears experimental.
 - Searches for GitHub issues referencing detox in _other_ projects: no substantive "we're switching away" issues found.
 
@@ -169,14 +191,23 @@ Tools with direct evidence from documentation or README. Cells marked "unknown" 
 
 ## Conclusion
 
-Detox is **archived but not forgotten**: shipping in current distros, no abandonment flags in package managers, and sufficient for its narrow use case (character sanitization for legacy/UTF-8 messes). Modern bulk rename workflows have shifted toward **f2, rnr, brename, and nomino**, which default to safe previews, support undo, and handle collisions more explicitly. A successor should answer:
+Detox is **archived but still shipping**: present in current distros, no abandonment flags in
+package managers, and sufficient for its narrow use case (character sanitization for legacy/UTF-8
+messes). **Newer bulk-rename tools (f2, rnr, brename, nomino) default to safe previews, support
+undo, and handle collisions more explicitly** — that is a comparison of the tools' own documented
+defaults. It is **not** a measured shift in user workflows: this research found no adoption data,
+no migration guide, and no user stating they moved from detox to any of them (see "Searches That
+Found Nothing" above). A successor should answer:
 
 - **Dry-run**: Default to preview? Or require `-x` / `--execute`?
 - **Collisions**: Abort, auto-number, or user-configurable rules?
 - **Undo**: Keep dump files, or rely on OS filesystem snapshots?
 - **Encoding**: UTF-8-native, or maintain detox's ISO-8859-1 transliteration for compatibility?
 
-Evidence points to dry-run-by-default and explicit undo as baseline expectations in 2026 CLI tools.
+**As design guidance, not a user-evidence claim:** dry-run-by-default and explicit undo are the
+prevailing conventions among the post-2020 tools surveyed here, so a successor that omits them
+would be the outlier. No user in any source consulted stated such an expectation — this is
+inferred from what the tools themselves ship, and should be weighed as convention, not demand.
 
 ---
 
@@ -191,7 +222,7 @@ Evidence points to dry-run-by-default and explicit undo as baseline expectations
 7. [convmv Manual](https://www.j3e.de/linux/convmv/man/)
 8. [Alpine Linux detox package](https://pkgs.alpinelinux.org/package/edge/testing/x86/detox)
 9. [Debian detox package](https://packages.debian.org/detox)
-10. [AlternativeTo: Detox alternatives](https://alternativeto.net/software/detox)
+10. [AlternativeTo: Detox alternatives](https://alternativeto.net/software/detox) — **HTTP 403, not fetched; search snippets only, no claim from it is verified**
 11. [GitHub - yaa110/nomino](https://github.com/yaa110/nomino)
 12. [Advanced Renamer User Guide](https://www.advancedrenamer.com/user_guide/v4/complete_guide)
 13. [GitHub - bulletmark/edir](https://github.com/bulletmark/edir)
@@ -199,7 +230,7 @@ Evidence points to dry-run-by-default and explicit undo as baseline expectations
 15. [mmv Man Page - Linux](https://www.systutorials.com/docs/linux/man/1-mmv/)
 16. [sanitize-filename npm package](https://www.npmjs.com/package/sanitize-filename)
 17. [Hacker News: F2 Cross-Platform CLI Batch Renaming Tool](https://news.ycombinator.com/item?id=44081850)
-18. [Linux Audit: Linux tools to bulk rename files](https://linux-audit.com/linux-tools-to-bulk-rename-files/)
+18. [Linux Audit: Linux tools to bulk rename files](https://linux-audit.com/linux-tools-to-bulk-rename-files/) — **HTTP 406, not fetched; no claim in this document rests on it**
 19. [Renameutils (qmv, imv, etc.)](https://www.nongnu.org/renameutils/)
 20. [Homebrew: detox formula](https://formulae.brew.sh/formula/detox)
 21. [GeeksforGeeks: How to Sanitize File Names using sanitize-filename](https://www.geeksforgeeks.org/node-js/how-to-sanitize-your-file-names-using-the-sanitize-filename-npm-package/)
@@ -208,3 +239,21 @@ Evidence points to dry-run-by-default and explicit undo as baseline expectations
 24. [Advanced Renamer Name Collision Rules](https://www.advancedrenamer.com/user_guide/v4/name_collision_rules)
 25. [PyPI: edir utility](https://pypi.org/project/edir/)
 26. [Repology: detox project information](https://repology.org/project/detox/information)
+
+---
+
+## Review record (stage 3)
+
+| Finding (reviewer)                                                                                                                                                                     | Verdict                                                   | Action or reason                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| "AlternativeTo lists F2 as primary detox replacement (**12 user endorsements**)" is stated as fact, but the page returns 403 (L1, **CRITICAL**)                                        | **Accept**                                                | Re-verified independently: still HTTP 403 (2026-07-31), nothing on that page was ever read. The "12 user endorsements" figure came from a search snippet and is **withdrawn**, with the withdrawal stated in the text so a later reader cannot resurrect it. The page's 403 status is now noted at both places it is referenced and in the source list. The weaker surviving claim — that AlternativeTo lists F2 among detox alternatives — is kept but labeled snippet-derived.                 |
+| Section heading "Why Users Switch Away from Detox" is contradicted 60 lines later by this document's own admission that AlternativeTo carries no switch-rationale comments (L2, MAJOR) | **Accept**                                                | Retitled "Candidate alternatives (no switch-rationale evidence found)", with a note recording the old heading and why it was unsupportable. No source in this research documents a single user's reason for leaving detox.                                                                                                                                                                                                                                                                       |
+| "Modern bulk rename workflows **have shifted toward** f2, rnr, brename, nomino" — no migration or adoption data exists anywhere in this document (L2, MAJOR)                           | **Accept**                                                | This conflated "newer tools ship these defaults" with "users moved". Reworded to state the tools' documented defaults, and to say explicitly that no adoption data, no migration guide, and no user statement of switching was found — which this document's own negative-results section already established.                                                                                                                                                                                   |
+| "Evidence points to dry-run-by-default and explicit undo as **baseline expectations** in 2026 CLI tools" — no user ever stated an expectation (L2, MAJOR)                              | **Accept**                                                | Reframed as design guidance derived from what the surveyed tools ship ("prevailing conventions... a successor that omits them would be the outlier"), with the absence of user-expectation evidence stated in the same sentence. The practical guidance survives; the false empirical backing does not.                                                                                                                                                                                          |
+| linux-audit.com (source 18) returns 406 but is listed as a source (L1, MINOR)                                                                                                          | **Accept**                                                | Re-verified: still 406. Kept in the list — silently deleting it would hide that it was consulted — but labeled "not fetched" with a note that no claim in this document rests on it.                                                                                                                                                                                                                                                                                                             |
+| Executive summary: "At least **15 active CLI alternatives** exist"                                                                                                                     | **Accept (found during adjudication, not by a reviewer)** | The matrix holds 15 rows including detox itself, and three of the rest are not CLI tools. Corrected to 14 alternatives: 11 CLI, 2 Windows GUI, 1 library — and "surveyed" is now defined as "read each tool's own documentation", not a popularity claim.                                                                                                                                                                                                                                        |
+| Matrix row for detox: "Config File: **YAML config**"                                                                                                                                   | **Accept (found during adjudication)**                    | Factually wrong, and self-contradicted by this document's own negative result that "no .toml, .yaml, or .json standard exists; all use in-built sequences". `detoxrc` uses a custom sequence/filter syntax. Corrected.                                                                                                                                                                                                                                                                           |
+| Matrix row for detox: "Collision Handling: **Unknown**"                                                                                                                                | **Accept (found during adjudication)**                    | Not unknown: doc 20 records that detox declines the rename when the target name already exists. Filled in, labeled "per upstream docs; no user-verified account found" — doc 20 is careful that this is a documentation claim rather than confirmed community experience, and that hedge is carried over. This matters because the collision default is the owner decision this corpus fed.                                                                                                      |
+| `convmv` coverage must be accurate enough to point users there, since legacy encoding repair is dropped from v1.0 (owner decision)                                                     | **Accept**                                                | Expanded the convmv section from one line to its actual operating contract from the fetched man page: `-f`/`-t` charset pair, name-only (never touches contents), **test mode by default** with `--notest` to apply, `-r` to recurse, `--fixdouble` for double-encoded UTF-8, `--replace` to opt into overwriting. Added the explicit consequence: "skip the name and report it, run `convmv`" is a complete answer, and doc 20's Arch BBS thread shows a real user doing exactly that sequence. |
+| Front-matter source count vs. body (L3)                                                                                                                                                | **Accept**                                                | Recounted: the numbered source list holds exactly 26 items and `queries_run` holds exactly 26 queries, so the totals were right — but "26 fetched pages" was not, since two were blocked. Front matter now reads 24 fetched + 2 blocked, naming both.                                                                                                                                                                                                                                            |
+| This document is orthogonal to the user-feedback synthesis and should stay separate rather than being merged or retired (L3)                                                           | **Accept, no change**                                     | Agreed, and for the reason L3 gives: this is not user feedback about detox, it is evidence about what a successor must offer. Merging it into the synthesis would be scope drift, and retiring it would delete the only comparative design record in the corpus.                                                                                                                                                                                                                                 |

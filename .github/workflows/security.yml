@@ -62,4 +62,4 @@ jobs:
       # enforcement; geiger is trend-tracking once dependencies exist.
       # `-p detoxrs` is required: the workspace root is a virtual manifest
       # and cargo-geiger refuses to run against it directly.
-      - run: cargo geiger -p detoxrs || true
+      - run: cargo geiger --manifest-path "$GITHUB_WORKSPACE/crates/detoxrs/Cargo.toml" || true
