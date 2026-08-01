@@ -6,12 +6,12 @@
 //! See `docs/research/00-proposal-rust-detox-successor.md` §3 (transform
 //! model) and §7.1 (module layout).
 //!
-//! Implemented so far (plan §7.1, M1 work packages 1-3): `policy`, `decode`,
-//! `classes`, `invisible`, `truncate`, `pipeline`.
+//! Implemented so far (plan §7.1, M1 work packages 1-4): `policy`, `decode`,
+//! `classes`, `invisible`, `truncate`, `pipeline`, `plan`.
 //!
-//! TODO(plan §7.1 WP4): `plan` (the three-layer collision engine). Later
-//! milestones add `percent` (M2), `rules` (M4) and `reserved` (M5). They are
-//! not stubbed out here as empty files; add each one when its logic is written.
+//! Later milestones add `percent` (M2), `rules` (M4) and `reserved` (M5). They
+//! are not stubbed out here as empty files; add each one when its logic is
+//! written.
 //!
 //! Never `unsafe`: this crate is pure by design, so `unsafe_code` is
 //! `forbid`den outright (not just `deny`d) -- there is no future FFI need
@@ -22,6 +22,7 @@ pub mod classes;
 pub mod decode;
 pub mod invisible;
 pub mod pipeline;
+pub mod plan;
 pub mod policy;
 pub mod truncate;
 
