@@ -14,3 +14,11 @@ categories.workspace = true
 workspace = true
 
 [dependencies]
+unicode-normalization = { workspace = true }
+unicode-segmentation = { workspace = true }
+
+# Version inline, not workspace-inherited: see the note in the workspace
+# Cargo.toml. `just dep-budget` would count a workspace-level dev-dependency.
+[dev-dependencies]
+proptest = "1"
+insta = "1"

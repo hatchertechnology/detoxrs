@@ -19,6 +19,20 @@ readme = "README.md"
 keywords = ["cli", "rename", "filename", "unicode", "sanitize"]
 categories = ["command-line-utilities", "filesystem"]
 
+# Versions live here so both crates inherit one number (plan §7.4's dependency
+# budget is counted across the workspace, so a second version line would be a
+# second entry to keep in sync, not a second dependency).
+[workspace.dependencies]
+# Stage 3 (NFC). Runtime dependency 1 of the 2 detoxrs-core is allowed.
+unicode-normalization = "0.1"
+# Stage 12's grapheme-cluster boundaries. Runtime dependency 2.
+unicode-segmentation = "1"
+# Dev-dependencies deliberately do NOT live here. `just dep-budget` harvests
+# `[workspace.dependencies]` as a whole and cannot tell which entries are only
+# ever inherited into a `[dev-dependencies]` table, so a `proptest` line here
+# counts against the 11-crate budget it is meant to be exempt from. Test-only
+# crates are declared per-crate instead, with their version inline.
+
 # Inherited by both crates via `[lints] workspace = true`. Clippy's
 # unsafe-code posture is set per-crate in each crate's source root instead
 # (forbid in detoxrs-core, deny in detoxrs) because they need to differ --

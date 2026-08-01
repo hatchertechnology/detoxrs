@@ -70,11 +70,14 @@ dep-budget:
             deps.update(t.get("dependencies", {}))
             deps.update(t.get("build-dependencies", {}))
 
+    # Only per-crate tables are counted. [workspace.dependencies] is a version
+    # catalog, not a usage list: a crate opting in writes `foo = { workspace =
+    # true }` in its OWN [dependencies], so `foo` is already a key there. Reading
+    # the catalog directly would also count dev-dependencies declared in it
+    # against the runtime budget, which is wrong.
     for m in [pathlib.Path("Cargo.toml"), *pathlib.Path("crates").glob("*/Cargo.toml")]:
         with m.open("rb") as f:
-            doc = tomllib.load(f)
-        harvest(doc)
-        harvest(doc.get("workspace", {}))
+            harvest(tomllib.load(f))
 
     deps -= {p.name for p in pathlib.Path("crates").iterdir() if p.is_dir()}
     print(f"{len(deps)}/{limit} direct dependencies: {sorted(deps) or '(none)'}")

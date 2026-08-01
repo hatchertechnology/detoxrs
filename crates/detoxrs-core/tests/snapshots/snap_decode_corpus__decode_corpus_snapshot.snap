@@ -1,0 +1,28 @@
+---
+source: crates/detoxrs-core/tests/snap_decode_corpus.rs
+expression: out
+---
+cafe_nfc             Utf8    disk:yes café.txt
+cafe_nfd             Utf8    disk:yes café.txt
+bidi_rlo             Utf8    disk:yes invoice‮fdp.txt
+zero_width_space     Utf8    disk:yes in​visible.txt
+zwj_emoji_family     Utf8    disk:yes 👨‍👩‍👦.png
+unicode_tag          Utf8    disk:yes hidden󠁁.txt
+con_txt              Utf8    disk:no  CON.txt
+hidden_file          Utf8    disk:yes .hidden file
+weird_dots           Utf8    disk:yes ..weird..name..
+pct20                Utf8    disk:yes 100%20done.txt
+pct25                Utf8    disk:yes 100%25 done.txt
+pct_malformed        Utf8    disk:yes 50%-70%.txt
+libstdcpp            Utf8    disk:yes libstdc++.so
+music_separator      Utf8    disk:yes a_-_b.mp3
+icon_cr              Utf8    disk:no  Icon<0d>
+lone_dash            Utf8    disk:yes -
+all_punctuation      Utf8    disk:yes ***
+dot                  Utf8    disk:yes .
+dotdot               Utf8    disk:yes ..
+shell_metachars      Utf8    disk:yes a & b (1985) [720p].mkv
+bjork_cp1252         Opaque  disk:no  Bj<f6>rk - Vespertine.mp3
+invalid_lone_ff      Opaque  disk:no  bad<ff>name.txt
+ascii_300            Utf8    disk:no  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.txt
+astral_emoji_128     Utf8    disk:no  😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀

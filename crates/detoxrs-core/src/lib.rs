@@ -6,17 +6,24 @@
 //! See `docs/research/00-proposal-rust-detox-successor.md` §3 (transform
 //! model) and §7.1 (module layout).
 //!
-//! Nothing here is implemented yet -- this is scaffolding, not the pipeline.
+//! Implemented so far (plan §7.1, M1 work packages 1-3): `policy`, `decode`,
+//! `classes`, `invisible`, `truncate`, `pipeline`.
 //!
-//! TODO(proposal §7.1, §3): this crate will eventually hold `policy`,
-//! `decode`, `percent`, `classes`, `invisible`, `rules`, `pipeline`,
-//! `truncate`, `reserved`, and `plan` modules. They are not stubbed out here
-//! as empty files; add each one when its logic is actually written.
+//! TODO(plan §7.1 WP4): `plan` (the three-layer collision engine). Later
+//! milestones add `percent` (M2), `rules` (M4) and `reserved` (M5). They are
+//! not stubbed out here as empty files; add each one when its logic is written.
 //!
 //! Never `unsafe`: this crate is pure by design, so `unsafe_code` is
 //! `forbid`den outright (not just `deny`d) -- there is no future FFI need
 //! here the way there is in the `detoxrs` binary crate.
 #![forbid(unsafe_code)]
+
+pub mod classes;
+pub mod decode;
+pub mod invisible;
+pub mod pipeline;
+pub mod policy;
+pub mod truncate;
 
 /// Returns this crate's own version.
 ///
