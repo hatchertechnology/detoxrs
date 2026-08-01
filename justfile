@@ -54,14 +54,31 @@ msrv:
 # Enforce the direct-dependency budget from proposal §7.2 (<= 11; transitive cap unmeasured)
 dep-budget:
     #!/usr/bin/env python3
+    # Counts [dependencies], [build-dependencies] and every
+    # [target.*.dependencies]/[target.*.build-dependencies] table, in the
+    # workspace root and each crate. Build- and target-gated deps still become
+    # Debian source packages, which is what the budget exists to bound.
+    # dev-dependencies are excluded: they never ship to a user.
     import tomllib, pathlib, sys
+
     limit, deps = 11, set()
-    for m in pathlib.Path("crates").glob("*/Cargo.toml"):
+
+    def harvest(tbl):
+        deps.update(tbl.get("dependencies", {}))
+        deps.update(tbl.get("build-dependencies", {}))
+        for t in tbl.get("target", {}).values():
+            deps.update(t.get("dependencies", {}))
+            deps.update(t.get("build-dependencies", {}))
+
+    for m in [pathlib.Path("Cargo.toml"), *pathlib.Path("crates").glob("*/Cargo.toml")]:
         with m.open("rb") as f:
-            deps |= set(tomllib.load(f).get("dependencies", {}))
+            doc = tomllib.load(f)
+        harvest(doc)
+        harvest(doc.get("workspace", {}))
+
     deps -= {p.name for p in pathlib.Path("crates").iterdir() if p.is_dir()}
     print(f"{len(deps)}/{limit} direct dependencies: {sorted(deps) or '(none)'}")
-    sys.exit(1) if len(deps) > limit else None
+    sys.exit(1 if len(deps) > limit else 0)
 
 # Advisory scan (cargo-audit)
 audit:
