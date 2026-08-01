@@ -16,7 +16,10 @@ verified-on-this-machine-2026-07-31:
     b'bad\\xffname.txt' and b'Bj\\xf6rk - Vespertine.mp3'"
   - "no unsafe-free signal-handler registration exists: std exposes none, and rustix's
     kernel_sigaction is `pub unsafe fn` and linux_raw-only"
-  - "just dep-budget reads only the [dependencies] table of crates/*/Cargo.toml; currently 0/11"
+  - "just dep-budget: the [dependencies]-only hole this plan found was FIXED in d0a36dd; the
+    recipe now also counts [build-dependencies] and every [target.*.dependencies] table, in the
+    workspace root and each crate, still excluding dev-dependencies. Verified by injecting a fake
+    build-dep and a fake target-dep and seeing both counted. Currently 0/11"
 spine: >
   Plan B's spine — the tool is usable at M1 — carrying Plan A's safety envelope unabridged and
   Plan C's property suite as M1's gate rather than as later milestones. The three plans do not
@@ -375,13 +378,37 @@ Each work package ends with `just gate` green and its own tests. This is where P
 lives — the test file is named and written before the file it tests, and no `todo!()` survives a
 commit that claims a package done.
 
-| WP  | Content                                                                           | Tests written first                                                                                      |
-| --- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| 1   | `policy.rs`, `decode.rs`, `tests/support/{mod,corpus}.rs`                         | `prop_decode.rs` (Decode is total), `snap_decode_corpus.rs`                                              |
-| 2   | `classes.rs`, `invisible.rs` (named set), `pipeline.rs` with the mask seam        | Safety closure, Non-empty, Dotfile preservation, Stage independence over 3/4/7/9/10, `.!file.txt` case   |
-| 3   | `truncate.rs`, the finalize loop, `Unrepresentable`                               | literal `***` case, Length bound (both fields), No grapheme splitting, Idempotence, Totality             |
-| 4   | `plan.rs`: three layers, renumbering, sibling-chain refusal                       | all six plan-time §8.2 properties, near-swap generators included                                         |
-| 5   | `cli.rs`, `walk.rs`, `fsops.rs` + fallback, `apply.rs`, `journal.rs`, `report.rs` | `--help` snapshot pinned first; Undo round-trip against the in-memory double; the §8.4 subset; `kill -9` |
+| WP  | Content                                                                       | Tests written first                                                                                                                   |
+| --- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `policy.rs`, `decode.rs`, `tests/support/{mod,corpus}.rs`                     | `prop_decode.rs` (Decode is total), `snap_decode_corpus.rs`                                                                           |
+| 2   | `classes.rs`, `invisible.rs` (named set), `pipeline.rs` with the mask seam    | Safety closure, Non-empty, Dotfile preservation, Stage independence over 3/4/7/9/10, `.!file.txt` case                                |
+| 3   | `truncate.rs`, the finalize loop, `Unrepresentable`                           | literal `***` case, Length bound (both fields), No grapheme splitting, Idempotence, Totality                                          |
+| 4   | `plan.rs`: three layers, renumbering, sibling-chain refusal                   | all six plan-time §8.2 properties, near-swap generators included                                                                      |
+| 5a  | `cli.rs`, `walk.rs`, `report.rs` — **preview only; no write path exists yet** | `--help` snapshot pinned first; `trycmd` preview cases over the corpus; walk-order determinism; the `<hh>`-escaped `Opaque` rendering |
+| 5b  | `fsops.rs` + fallback, `apply.rs`, `journal.rs`, `undo`                       | Undo round-trip against the in-memory double; the §8.4 subset; the TOCTOU row; `kill -9` mid-batch                                    |
+
+**Reviewer amendment (2026-07-31): WP5 is split into 5a and 5b.** As drafted, WP5 was six files
+and the entire I/O surface in one package — the CLI, the walk, the rename syscall, the apply loop,
+the journal and the reporter — sequenced after the four packages the plan already calls its
+riskiest stretch. Two reasons to split it, and neither changes the milestone's scope or its exit
+criteria:
+
+1. **It creates a genuinely shippable intermediate artifact.** At the end of 5a there is a binary
+   that walks a tree, computes a plan and prints a preview, and in which **no code path can write
+   to a filesystem, because none has been written yet**. That is not a demo: preview is the product
+   (P5), so a preview-only build is the honest majority of the tool, and it cannot lose a file by
+   construction rather than by discipline. It answers the "nothing visible before M1" cost in §2
+   without weakening the spine, and it is the artifact to put in front of a user first.
+2. **It puts the split where the risk actually is.** Risk 12's response was already "split WP5 into
+   its own milestone"; doing the split up front means the escape hatch is a boundary that already
+   exists rather than a mid-flight replan. It also isolates the two hardest things in M1 — the
+   journal crash protocol (risk 1) and the rename fallback ladder — into one package whose only job
+   is the write path, instead of debugging them alongside argument parsing.
+
+The exit criteria for M1 as a whole are unchanged: 5b must still be gate-green, with the `kill -9`
+test and the §8.4 subset passing, before M1 is done. This is a sequencing change, not a descoping
+one. Risk 12's trigger now reads: if 5a is not gate-green by the 900-line mark, ship 5a as v0.1
+preview-only and move 5b to its own milestone.
 
 ### 7.2 `crates/detoxrs-core`
 
@@ -563,9 +590,11 @@ gate on the only call site of `rename_noreplace`, and there is no other code pat
 Plan B's count is the correct one for this scope. Plan A's table said 4 and then corrected itself
 to 5 mid-draft; the correction was right as far as it went, but A's M1 also excludes `truncate`,
 which is why it does not need `unicode-segmentation` — under this plan's M1 scope it does, so 6 is
-the honest number. Verified against the recipe: `just dep-budget` unions the `[dependencies]`
-tables of `crates/*/Cargo.toml` and subtracts workspace members, so the path dependency on
-`detoxrs-core` does not count and dev-dependencies do not either.
+the honest number. Verified against the recipe: `just dep-budget` unions the `[dependencies]`,
+`[build-dependencies]` and `[target.*.dependencies]` tables of the workspace root and each
+crate, then subtracts workspace members — so the path dependency on `detoxrs-core` does not
+count and dev-dependencies do not either. (The recipe read only `[dependencies]` when this plan
+was drafted; that hole was closed in `d0a36dd`, so risk 13 is discharged.)
 
 ## 8. Spike schedule
 
@@ -595,22 +624,22 @@ independently.
 
 ## 9. Risk register
 
-| Risk                                                                                                                                   | Source    | Early detection signal                                                                                                                                                                                                                                                                        |
-| -------------------------------------------------------------------------------------------------------------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Journal crash protocol not atomic enough on a real filesystem; a `done` survives without its rename, or a rename without any record | A         | M1 WP5's `kill -9` mid-batch test, run before M1 is called done. If it fires, the wire format needs a checksum or a commit marker — cheap now, a migration story for every journal ever written after M1.                                                                                     |
-| 2. A macOS volume format silently clobbers instead of erroring on unsupported `NOREPLACE`                                              | A         | Spike 13's `hdiutil` HFS+/exFAT image, gating the v0.1 release. Fix is narrow (a scoped `getattrlist`-equivalent probe for that format only), but demotion-on-error has no error to observe, so detection cannot be deferred to a user.                                                       |
-| 3. `walkdir`'s symlink handling has an edge case, or a directory becomes a symlink between snapshot and apply                          | A         | The symlink-to-`../..` row **plus** the between-snapshot-and-apply race variant, both at M1 rather than M6. #20 (symlink loops) was never characterized upstream either.                                                                                                                      |
-| 4. Idempotence breaks once `truncate` interacts with `finalize`, making the cycle proof stop holding silently                          | A         | The plan-time sibling-chain refusal is a loud named error from M1; the fuzz oracle runs from M2, not M6. Signal: the assertion fires, or Idempotence's shrinker returns a truncation-shaped counterexample.                                                                                   |
-| 5. `rustix` changes `renameat_with`/`RenameFlags` non-additively, or its wrapper needs `unsafe` in a future major                      | A         | Pin in `Cargo.lock`/`deny.toml`; re-run the compile-and-run-on-APFS check on every `rustix` major bump. Done today; record the result each time. If it ever regresses, the `libc` shim and its unsafe-audit budget come back.                                                                 |
-| 6. Hardcoded 255/255 limits wrong on some filesystem                                                                                   | B         | `ENAMETOOLONG` from a real run, which §5.8 already designates as evidence the detected limit was wrong. Direction of error is over-truncation, which the collision engine catches rather than silently merging.                                                                               |
-| 7. The named invisible set misses a hazard the UCD closure would catch                                                                 | B         | A user report naming a surviving invisible character outside the bidi/zero-width/Tags set. Nothing in the tracker or `user_feedback_online.md` reports one. Closed at M4 regardless.                                                                                                          |
-| 8. Stage independence degenerates into reimplementing the pipeline in the test                                                         | C         | Review signal, not a runtime one: any test file that contains a second copy of stage ordering. The mask seam (§5.2) exists so there is nothing to copy.                                                                                                                                       |
-| 9. Length bound passes vacuously on one axis                                                                                           | C         | The property itself, once both fields are concrete: a 130-astral-emoji input is a named corpus entry, so a one-axis implementation fails at M1 WP3 rather than on ext4 in the field.                                                                                                          |
-| 10. The apply-time TOCTOU recheck is never exercised                                                                                   | C         | The new §8.4 row, in M1's exit criteria.                                                                                                                                                                                                                                                      |
-| 11. Nobody responds to the v0.1 release ask, so spikes 7, 8, 11 stay open anyway                                                       | B         | Zero responses within one release cycle of posting to the venues `user_feedback_online.md` names. Fallback: run spikes 7 and 11 in report-only mode over the owner's own Downloads/media/archive trees and label the sample size honestly.                                                    |
-| 12. M1 is too large and stalls                                                                                                         | this plan | WP4 (`plan.rs`) not gate-green by the time cumulative production lines pass 900 (the midpoint of §7.3's v0.1 range). Response: split WP5 into its own milestone and accept C's ordering for that boundary.                                                                                    |
-| 13. The dep-budget gate has a hole                                                                                                     | this plan | Verified: the recipe reads only `[dependencies]`, so `[build-dependencies]` and `[target.'cfg(..)'.dependencies]` escape it. Signal: the first PR adding a `build.rs` dependency or a target table. M4's UCD generator is std-only, so extend the recipe in the same PR that adds `build.rs`. |
-| 14. Windows-facing defaults are assumptions and their retrofit cost is unknown                                                         | A         | None available — this is the honest entry. No Windows machine exists. Containment claim: a wrong assumption is confined to `reserved.rs`/`limits.rs`. That claim is itself untested, and is recorded as such rather than as a mitigation.                                                     |
+| Risk                                                                                                                                   | Source    | Early detection signal                                                                                                                                                                                                                                                                                                                                               |
+| -------------------------------------------------------------------------------------------------------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Journal crash protocol not atomic enough on a real filesystem; a `done` survives without its rename, or a rename without any record | A         | M1 WP5's `kill -9` mid-batch test, run before M1 is called done. If it fires, the wire format needs a checksum or a commit marker — cheap now, a migration story for every journal ever written after M1.                                                                                                                                                            |
+| 2. A macOS volume format silently clobbers instead of erroring on unsupported `NOREPLACE`                                              | A         | Spike 13's `hdiutil` HFS+/exFAT image, gating the v0.1 release. Fix is narrow (a scoped `getattrlist`-equivalent probe for that format only), but demotion-on-error has no error to observe, so detection cannot be deferred to a user.                                                                                                                              |
+| 3. `walkdir`'s symlink handling has an edge case, or a directory becomes a symlink between snapshot and apply                          | A         | The symlink-to-`../..` row **plus** the between-snapshot-and-apply race variant, both at M1 rather than M6. #20 (symlink loops) was never characterized upstream either.                                                                                                                                                                                             |
+| 4. Idempotence breaks once `truncate` interacts with `finalize`, making the cycle proof stop holding silently                          | A         | The plan-time sibling-chain refusal is a loud named error from M1; the fuzz oracle runs from M2, not M6. Signal: the assertion fires, or Idempotence's shrinker returns a truncation-shaped counterexample.                                                                                                                                                          |
+| 5. `rustix` changes `renameat_with`/`RenameFlags` non-additively, or its wrapper needs `unsafe` in a future major                      | A         | Pin in `Cargo.lock`/`deny.toml`; re-run the compile-and-run-on-APFS check on every `rustix` major bump. Done today; record the result each time. If it ever regresses, the `libc` shim and its unsafe-audit budget come back.                                                                                                                                        |
+| 6. Hardcoded 255/255 limits wrong on some filesystem                                                                                   | B         | `ENAMETOOLONG` from a real run, which §5.8 already designates as evidence the detected limit was wrong. Direction of error is over-truncation, which the collision engine catches rather than silently merging.                                                                                                                                                      |
+| 7. The named invisible set misses a hazard the UCD closure would catch                                                                 | B         | A user report naming a surviving invisible character outside the bidi/zero-width/Tags set. Nothing in the tracker or `user_feedback_online.md` reports one. Closed at M4 regardless.                                                                                                                                                                                 |
+| 8. Stage independence degenerates into reimplementing the pipeline in the test                                                         | C         | Review signal, not a runtime one: any test file that contains a second copy of stage ordering. The mask seam (§5.2) exists so there is nothing to copy.                                                                                                                                                                                                              |
+| 9. Length bound passes vacuously on one axis                                                                                           | C         | The property itself, once both fields are concrete: a 130-astral-emoji input is a named corpus entry, so a one-axis implementation fails at M1 WP3 rather than on ext4 in the field.                                                                                                                                                                                 |
+| 10. The apply-time TOCTOU recheck is never exercised                                                                                   | C         | The new §8.4 row, in M1's exit criteria.                                                                                                                                                                                                                                                                                                                             |
+| 11. Nobody responds to the v0.1 release ask, so spikes 7, 8, 11 stay open anyway                                                       | B         | Zero responses within one release cycle of posting to the venues `user_feedback_online.md` names. Fallback: run spikes 7 and 11 in report-only mode over the owner's own Downloads/media/archive trees and label the sample size honestly.                                                                                                                           |
+| 12. M1 is too large and stalls                                                                                                         | this plan | WP4 (`plan.rs`) not gate-green by the time cumulative production lines pass 900 (the midpoint of §7.3's v0.1 range). Response: ship WP5a as a preview-only v0.1 (it cannot write, so it is safe by construction) and move WP5b to its own milestone. The 5a/5b boundary now exists up front, so this is a decision, not a replan.                                    |
+| 13. ~~The dep-budget gate has a hole~~ **DISCHARGED**                                                                                  | this plan | Was real: the recipe read only `[dependencies]`, so `[build-dependencies]` and `[target.'cfg(..)'.dependencies]` escaped the cap. **Fixed in `d0a36dd`** before M1 began, and verified by injecting a fake build-dep and a fake target-dep and confirming both are counted. No residual signal to watch; M4's UCD generator can add a `build.rs` without a gate gap. |
+| 14. Windows-facing defaults are assumptions and their retrofit cost is unknown                                                         | A         | None available — this is the honest entry. No Windows machine exists. Containment claim: a wrong assumption is confined to `reserved.rs`/`limits.rs`. That claim is itself untested, and is recorded as such rather than as a mitigation.                                                                                                                            |
 
 ## 10. Deliberately out of v1.0
 
@@ -686,10 +715,11 @@ usize::MAX`; APFS `utf16 = 255, bytes = usize::MAX`; unknown volume and NTFS/exF
 17. **§3.1**, `decode`'s signature: drop the `&Policy` parameter. With repair gone by owner
     decision there is no field for it to read, and P2 makes encoding a non-policy. Sweep §3.2's
     stage-1 row, §8.1's decode property, and §7.1's `decode.rs` line for the same signature.
-18. **§7.2**: note that the enforced `just dep-budget` recipe reads only the `[dependencies]`
-    table, so `[build-dependencies]` and `[target.'cfg(..)'.dependencies]` currently escape the
-    cap, and state the intent that they count — to be applied to the recipe when the first
-    `build.rs` lands (M4).
+18. **§7.2**: note that the enforced `just dep-budget` recipe counts `[dependencies]`,
+    `[build-dependencies]` and every `[target.*.dependencies]` table, in the workspace root and
+    each crate, excluding dev-dependencies — because a build- or target-gated crate still becomes
+    a Debian source package, which is what the budget exists to bound. (The recipe read only
+    `[dependencies]` until `d0a36dd`; that gap is closed, so no amendment deferral is needed.)
 19. **§10 v0.1**: add the two behaviors this plan's v0.1 ships differently from the section's
     current implication — no signal handler, and a hardcoded `bytes = 255, utf16 = 255` limit pair
     until v0.3's per-directory detection replaces it — alongside the existing stage-2 and stage-11
@@ -698,3 +728,47 @@ usize::MAX`; APFS `utf16 = 255, bytes = usize::MAX`; unknown volume and NTFS/exF
     fresh `symlink_metadata` recheck written against `&dyn RenameOps` and a journal-writer trait,
     so the Undo round-trip property and the TOCTOU test can drive it from an in-memory double
     without moving the `RenameOps` trait into `detoxrs-core`.
+
+---
+
+## 12. Reviewer's pass (orchestrator, 2026-07-31)
+
+I read this plan end to end after the consolidation and made four changes. Recorded here so the
+delta from the opus draft is auditable rather than invisible.
+
+**Changed:**
+
+1. **WP5 split into 5a (preview-only) and 5b (write path)** — §7.1, with the rationale inline and
+   risk 12's trigger updated to match. This is the only substantive change. The reasoning is that
+   WP5 was the entire I/O surface in one package, positioned after the plan's own riskiest stretch,
+   and that splitting it yields a shippable artifact which cannot write to a filesystem because no
+   write code exists in it yet. Given that preview is the product, a preview-only build is not a
+   demo — it is most of the tool, safe by construction.
+2. **Risk 13 discharged, and its two dependent claims corrected** (front matter, §7.4, amendment
+   18). The plan correctly identified that `just dep-budget` read only `[dependencies]`, so
+   build-dependencies and target-gated dependencies escaped the cap. That is now fixed in `d0a36dd`
+   — the recipe counts `[dependencies]`, `[build-dependencies]` and every `[target.*.dependencies]`
+   table across the workspace root and each crate, verified by injecting a fake build-dep and a fake
+   target-dep. So this is no longer a risk to watch or an amendment to defer.
+
+**Checked and let stand, deliberately:**
+
+- The spine. I would have been tempted toward Plan C, and the argument that convinced me is the
+  distinction this plan draws between _tests before code_ (a per-commit discipline, adopted) and
+  _test-only milestones_ (a delivery cost buying no additional correctness, rejected). Since
+  `transform` and `plan` are pure, that distinction holds.
+- The 22-28 unit total against an 18-24 budget. Recording an overrun and pointing a named risk at
+  it is better than trimming the estimate to fit, which is the failure mode this avoided.
+- Rejecting SIGINT handling from v1.0. The verification is sound (std has no signal API; rustix's
+  equivalent is `unsafe` and Linux-only) and the argument that `kill -9` is the strictly harsher
+  case the journal already covers is correct.
+- All three of Plan C's defect findings, and the two mechanism rejections inside them. The
+  `--max-len` over-truncation objection in §5.1 is a real catch and the right call.
+- The 20 required proposal amendments are left unapplied, as instructed. They are a separate,
+  reviewable change to the design document and should not ride along inside a plan.
+
+**One thing I want stated plainly**, because it is the plan's real exposure and no amount of
+sequencing fixes it: two spikes (3 and 4, Windows reserved names and NTFS/exFAT length limits)
+**cannot be closed with the hardware that exists**, so every Windows-facing default in v1.0 is a
+documented assumption. The plan says this in §8 and risk 14 and does not pretend otherwise, which
+is the correct handling. It is repeated here so it survives into implementation.
