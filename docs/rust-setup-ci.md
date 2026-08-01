@@ -53,6 +53,19 @@ actually do:
 | Linux aarch64 musl           | **Deferred**                                  | Needs a musl **cross** C toolchain (targeting aarch64 from an x86_64 host), which isn't a simple apt package — it needs a prebuilt musl-cross toolchain or tooling like `cross-rs`/`cargo-zigbuild`. Adding that is a real piece of tooling work, not a one-line CI change; deferred rather than half-implemented. |
 | Windows x86_64 (best-effort) | `test-windows` job, `continue-on-error: true` | Matches the proposal's own tier for Windows.                                                                                                                                                                                                                                                                       |
 
+**Owner-decision compliance (`docs/owner-decisions.md`, 2026-07-31 "Test
+hardware"):** the owner has Linux and macOS only, no Windows machine and no
+NTFS or exFAT volume. Windows therefore "must compile and unit-test in CI, but
+no filesystem behavior is asserted," and must not be promoted to tier 1. This
+matrix complies: the Windows job compiles and runs the unit tests on a
+GitHub-hosted runner, is `continue-on-error: true`, and is deliberately kept
+out of the tier-1 matrix. **Nothing in this document asserts verified Windows
+filesystem behavior, and nothing here should be read as doing so** — a green
+`test-windows` job means the code compiled and the unit tests passed on a
+hosted runner, not that reserved-name or path-length behavior has been
+validated on NTFS or exFAT (proposal §11 spikes 3 and 4 remain open per the
+owner decision).
+
 **On `macos-13`:** I initially wrote the matrix as
 `[ubuntu-latest, macos-latest, macos-13]` (the conventional x86_64 label at
 the time the guide text and much prior art were written). `actionlint`
@@ -115,35 +128,46 @@ msrv` only builds and `msrv.md` is explicit that the MSRV job should run
   the full test suite. No justfile edit needed for this — it's an
   additional CI step, not a missing recipe.
 - **`lint` job** deliberately does **not** call `just fmt-check`. That
-  recipe runs `npx prettier --check "**/*.md"` over the _entire_ repo in
+  recipe runs prettier over the _entire_ repo (`**/*.{md,yml,yaml,json}`) in
   addition to `cargo fmt --all --check`. Coupling the Rust lint gate to
-  every Markdown file in the repo (including ones other agents are actively
-  editing — see `docs/rust-setup-notes.md`'s note that `just gate` currently
-  fails on `fmt-check` for exactly this reason) would make this CI job flaky
-  for reasons that have nothing to do with Rust code quality. Used
-  `cargo fmt --all --check` + `cargo clippy --workspace --all-targets
---locked -- -D warnings` directly instead.
+  every Markdown/YAML/JSON file in the repo (including ones other agents are
+  actively editing) would make this CI job flaky for reasons that have
+  nothing to do with Rust code quality. Used `cargo fmt --all --check` +
+  `cargo clippy --workspace --all-targets --locked -- -D warnings` directly
+  instead.
 - **`test`/`build` steps** use direct `cargo build/test --workspace
---locked` rather than `just build`/`just test`, because those two recipes
-  don't pass `--locked` (`cargo test --workspace`, `cargo build
---workspace`). Without `--locked`, a CI run could silently succeed against
-  a locally-mutated `Cargo.lock` instead of failing when the committed
-  lockfile is out of sync with `Cargo.toml` — the guide's reproducibility
-  concern for an application crate with a committed lockfile.
+--locked` rather than `just build`/`just test`. **Status update
+  (2026-07-31): the stated reason is obsolete** — `just build` and
+  `just test` now both pass `--locked` (read: `justfile`), so the recipes
+  and the CI steps are equivalent today. The CI steps were left as bare
+  `cargo` rather than switched, which is a defensible choice (the workflow
+  no longer depends on `just` being installed for these jobs) but it is now
+  a choice, not a necessity. The original reproducibility concern stands
+  either way: without `--locked`, CI could silently succeed against a
+  mutated `Cargo.lock`.
 
-**Recipe requests for whichever agent owns the justfile next** (not
-implemented here — out of this agent's scope per the task brief):
+**Recipe requests for whichever agent owns the justfile next — both now
+satisfied** (re-verified 2026-07-31 against `just --list` and `justfile`):
 
-- `test`/`build` could gain `--locked` (`cargo test --workspace --locked`,
-  `cargo build --workspace --locked`) to match what CI actually runs and
-  keep local/CI identical, per `local-dev.md`'s stated goal.
-- A Rust-only formatting recipe (e.g. `fmt-check-rust: cargo fmt --all
---check`) separate from the combined Markdown+Rust `fmt-check` would let
-  CI's `lint` job call `just` too, instead of duplicating the bare `cargo
-fmt` command.
+- ~~`test`/`build` could gain `--locked`.~~ **DONE** — `cargo build
+--workspace --locked`, `cargo test --workspace --locked`.
+- ~~A Rust-only formatting recipe separate from the combined Markdown+Rust
+  `fmt-check`.~~ **DONE** — `fmt-check-rust` (`cargo fmt --all --check`),
+  with `fmt-check-md` as the prettier half. The `lint` job could now call
+  `just fmt-check-rust` instead of duplicating the bare command; that is a
+  small follow-up, not a gap.
 
-No existing recipe was edited, and no new recipe was invented and called as
-if it existed.
+**Related design question, recorded not acted on:** `just gate` (the
+documented pre-push check) still depends on the combined `fmt-check`, so a
+Rust developer's gate fails on unrelated Markdown drift anywhere in the
+repo — the same coupling this job avoided. Recommendation for the justfile
+owner: point `gate` at `fmt-check-rust` and leave repo-wide `fmt-check` to
+`ci`. The justfile is shared, so this is a recommendation only. (`just gate`
+was re-run during the stage-3 review and **passes** today, exit 0 — the
+coupling is a fragility, not a current failure.)
+
+No existing recipe was edited by this pass, and no new recipe was invented
+and called as if it existed.
 
 ## Dependabot
 
@@ -158,16 +182,20 @@ will open PRs that bump the SHA (with an updated version comment), matching
 
 ## Deferred guide recommendations (explicitly out of scope this round)
 
-- `security` and `vet` jobs from `ci-cd.md` (cargo-audit, cargo-deny, Trivy,
-  cargo-geiger, cargo-vet) — another agent's scope (supply-chain/security
-  workflows; this agent was explicitly told not to create
-  `security.yml`/`supply-chain.yml`).
-- Scheduled (cron) runs for RustSec/license checks, evidence retention for
-  release artifacts, org-level policies requiring full-length SHA pins —
-  `ci-cd.md`'s "Evidence retention and scheduled checks" section; belongs
-  with the security/release work, not this CI skeleton.
-- `release-please`/release workflow — explicitly out of scope
-  (`release.yml` named as another agent's file).
+- ~~`security` and `vet` jobs from `ci-cd.md` (cargo-audit, cargo-deny, Trivy,
+  cargo-geiger, cargo-vet)~~ — **DONE by another agent**, as separate workflow
+  files rather than jobs in `ci.yml`: `.github/workflows/security.yml` and
+  `.github/workflows/supply-chain.yml`. See
+  `docs/rust-setup-supply-chain.md`. Not folded into `ci.yml`; `ci.yml` is
+  unchanged by that work.
+- ~~Scheduled (cron) runs for RustSec/license checks~~ — **DONE** in
+  `security.yml` (weekly `0 6 * * 1`). Evidence retention for release
+  artifacts and org-level full-length-SHA policy remain **OUTSTANDING** and
+  belong with release/org work, not this CI skeleton.
+- ~~`release-please`/release workflow~~ — **DONE by another agent**:
+  `.github/workflows/release.yml`, `docs/rust-setup-release.md`. Still out of
+  this document's scope; noted so the deferral does not read as an open
+  request.
 - True aarch64-musl and any emulated/hosted-ARM _test_ execution (as
   opposed to build-only cross-compilation) — see the matrix table above.
 
@@ -193,3 +221,23 @@ following has been verified against a live GitHub Actions run:
 
 A push to a branch (or a PR) against this repo is what would validate all of
 the above.
+
+## Review record (stage 3)
+
+Adjudicated 2026-07-31. "Ran" = command executed during this pass; "read" = verified
+by reading the file.
+
+| Finding                                                                                          | Reviewer | Verdict | Action / reason                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------ | -------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stated reason for not using `just build`/`just test` (no `--locked`) is obsolete                 | L1, L2   | ACCEPT  | `justfile` now passes `--locked` on both (read). Marked the reason obsolete and reframed the bare-`cargo` steps as a choice, not a necessity. Did not change `ci.yml`.                                                                                                                                                                 |
+| Recipe request "Rust-only fmt-check" already satisfied                                           | L1, L2   | ACCEPT  | `fmt-check-rust` exists (ran `just --list`). Both recipe requests marked DONE so they stop reading as open asks.                                                                                                                                                                                                                       |
+| Cross-reference to `rust-setup-notes.md`'s "`just gate` currently fails" is stale                | L1       | ACCEPT  | Removed the stale cross-reference. Re-ran `just gate`: **passes, exit 0**.                                                                                                                                                                                                                                                             |
+| Deferred `security`/`vet` jobs and `release-please` still framed as another agent's open work    | L2       | ACCEPT  | Marked DONE with the actual files (`security.yml`, `supply-chain.yml`, `release.yml`) named, while keeping them out of this document's scope.                                                                                                                                                                                          |
+| Platform matrix contradicts owner-decisions on Windows                                           | L2       | REJECT  | L2 itself concluded "no contradiction" and this pass agrees: Windows is `continue-on-error`, outside the tier-1 matrix, and no filesystem behavior is claimed. Rather than change the matrix, added an explicit owner-decision compliance note so a future reader cannot mistake a green Windows job for verified NTFS/exFAT behavior. |
+| Action SHA table (checkout v4.4.0, rust-toolchain v1, rust-cache v2.9.1, install-action v2.85.5) | L1       | CONFIRM | L1 re-verified all four against `git ls-remote`. No change.                                                                                                                                                                                                                                                                            |
+| "What remains unvalidated" should be repeated in a final summary                                 | L3       | REJECT  | The section already exists, is titled unambiguously, and states "This workflow has not been executed." A duplicate summary adds no information and risks the two copies drifting. L3 itself recorded "no change to the document required."                                                                                             |
+| Matrix `[ubuntu-latest, macos-latest, macos-15-intel]` matches `ci.yml`                          | L1       | CONFIRM | Read `ci.yml`. No change.                                                                                                                                                                                                                                                                                                              |
+
+**Not claimed:** this workflow still has never run in GitHub Actions. Nothing in this
+pass changed that, and no statement here should be read as a passing CI run. The local
+`just gate` result above is a local result only.

@@ -33,22 +33,25 @@ Followed `supply-chain.md`'s template section-for-section: `[graph]`,
 
 ### License allow-list, and why each entry is there
 
-| License        | Why allowed                                                                                                                                                                                                                                                                                          |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BSD-3-Clause` | **This project's own license** (see `/LICENSE-MIT` and `/LICENSE-APACHE`). Without this entry, `cargo deny check licenses` would flag `detoxrs-core` and `detoxrs` themselves — cargo-deny checks the whole tree, including workspace members.                                                       |
-| `MIT`          | Guide's baseline recommendation; the most common permissive license on crates.io.                                                                                                                                                                                                                    |
-| `Apache-2.0`   | Guide's baseline recommendation; frequently dual-licensed with MIT (`MIT OR Apache-2.0`), and adds an explicit patent grant MIT lacks.                                                                                                                                                               |
-| `Unicode-3.0`  | Covers Unicode data/table crates. Directly relevant here: proposal §7.2 plans `unicode-normalization` and `unicode-segmentation` as direct dependencies, and crates like `unicode-ident`/`unicode-width` commonly appear transitively (e.g. via `syn`, itself pulled in by `clap`'s derive feature). |
-| `BSD-2-Clause` | Common permissive license across the crates.io ecosystem (e.g. some `syn`/`quote`/`proc-macro2`-adjacent and dual/triple-licensed crates). Functionally MIT-equivalent: attribution-only, no copyleft.                                                                                               |
-| `ISC`          | Same rationale as `BSD-2-Clause` — permissive, attribution-only, shows up as an alternative in some dual-licensed crates.                                                                                                                                                                            |
+| License        | Why allowed                                                                                                                                                                                                                                                                                                                                                                                                          |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BSD-3-Clause` | **Third-party dependencies only.** This _was_ the project's own license; the project was relicensed to `MIT OR Apache-2.0` on 2026-07-31 (see the resolved section below) and `LICENSE` no longer exists. The entry is retained because BSD-3-Clause dependencies are acceptable on their own merits, not because the project uses it. It is also why `cargo deny check` now warns `license-not-encountered` for it. |
+| `MIT`          | **One of this project's own two licenses** (`LICENSE-MIT`), and separately the guide's baseline recommendation and the most common permissive license on crates.io. Without `MIT`/`Apache-2.0` in the allow-list, `cargo deny check licenses` would flag `detoxrs-core` and `detoxrs` themselves — cargo-deny checks the whole tree, including workspace members.                                                    |
+| `Apache-2.0`   | **This project's other own license** (`LICENSE-APACHE`), and the guide's baseline recommendation; frequently dual-licensed with MIT (`MIT OR Apache-2.0`), and adds the explicit patent grant MIT lacks.                                                                                                                                                                                                             |
+| `Unicode-3.0`  | Covers Unicode data/table crates. Directly relevant here: proposal §7.2 plans `unicode-normalization` and `unicode-segmentation` as direct dependencies, and crates like `unicode-ident`/`unicode-width` commonly appear transitively (e.g. via `syn`, itself pulled in by `clap`'s derive feature).                                                                                                                 |
+| `BSD-2-Clause` | Common permissive license across the crates.io ecosystem (e.g. some `syn`/`quote`/`proc-macro2`-adjacent and dual/triple-licensed crates). Functionally MIT-equivalent: attribution-only, no copyleft.                                                                                                                                                                                                               |
+| `ISC`          | Same rationale as `BSD-2-Clause` — permissive, attribution-only, shows up as an alternative in some dual-licensed crates.                                                                                                                                                                                                                                                                                            |
 
 None of these were added speculatively for their own sake — each is either
 the project's own license or appears in the guide's own baseline / is
 foreseeably needed for the exact dependencies proposal §7.2 already names.
-`cargo deny check` currently emits `license-not-encountered` warnings for
-`MIT`, `Apache-2.0`, `Unicode-3.0`, `BSD-2-Clause`, and `ISC` — expected and
-correct, because nothing in the tree uses them yet (see "What I actually
-ran" below).
+`cargo deny check` emits `license-not-encountered` warnings for the allowed
+licenses nothing in the tree uses yet. **Re-run 2026-07-31 (stage 3): four
+warnings — `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `Unicode-3.0`.** The earlier
+figure of five (which included `MIT` and `Apache-2.0`) predates the relicense:
+the two workspace crates now declare `MIT OR Apache-2.0`, so those two
+licenses are genuinely encountered, and `BSD-3-Clause` moved onto the
+not-encountered list in their place.
 
 ### The BSD-3-Clause vs. MIT/Apache-2.0 conflict (resolved)
 
@@ -83,17 +86,23 @@ dependency.
 
 ### Dependency-count budget: not enforced by `cargo-deny`
 
-The task brief describes the proposal's budget as "<=10 direct / <=45 total
+The task brief described the proposal's budget as "<=10 direct / <=45 total
 crates." Reading `docs/research/00-proposal-rust-detox-successor.md` §7.2
 directly (rather than relying on the summary): the actual, current text sets
 **<=11 direct dependencies** (explicitly counted as eleven, including
 `terminal_size` as a conditional 11th) and says a total-transitive cap was
 **deliberately struck** from the document — "nobody has run `cargo tree`
 against this exact set... a number asserted without measuring is not a
-budget." So there is currently no total-crate ceiling to enforce, only a
+budget." So there is no total-crate ceiling to enforce, only a
 direct-dependency one, and even that is provisional pending the first
-`cargo add`. I'm recording this discrepancy rather than silently reconciling
+`cargo add`. I recorded this discrepancy rather than silently reconciling
 it with the task brief's "<=10 / <=45" framing.
+
+**Adjudicated 2026-07-31: this reading is correct and is now the single
+authority across all five setup notes.** The proposal is the governing source;
+`docs/rust-setup-notes.md` had a stale "<= 45" line and it has been struck.
+There is exactly one enforced cap: **<= 11 direct dependencies**, enforced by
+`just dep-budget` (ran: `0/11 direct dependencies: (none)`).
 
 `cargo-deny` has no native "max N direct dependencies" check — its
 `[bans]` section bans/limits specific crates and duplicate versions, not
@@ -102,7 +111,12 @@ brief and per proposal §7.2's own reasoning: every transitive crate becomes
 a Debian source package), so it needs a small CI check, not a cargo-deny
 rule. **I did not add that check** — it belongs in `ci.yml`, which I do not
 own, and it should live next to `cargo tree`/build steps rather than in a
-security-scanning workflow. Recorded here for whoever owns `ci.yml`:
+security-scanning workflow. Recorded here for whoever owns `ci.yml`
+(**since DONE**: implemented as the `dep-budget` justfile recipe, which parses
+workspace members' `[dependencies]` tables in Python and exits non-zero above
+11; it is chained into `just gate`, so it runs on every pre-push check.
+`CONTRIBUTING.md` documents it. It is not a separate `ci.yml` step — the recipe
+inside `gate` covers it):
 
 ```bash
 # Direct-dependency count check (fails if the workspace's direct,
@@ -190,9 +204,21 @@ Real and informative even with zero dependencies: `detoxrs-core` gets the
 `unsafe` found, but geiger doesn't recognize `#![deny(unsafe_code)]` as the
 same guarantee as `forbid` — it only special-cases `forbid`). That's a
 correct, if minor, distinction: `deny` is a _default_ that a later
-`#[allow(unsafe_code)]` can override in a specific block (which is exactly
-why `docs/rust-setup-notes.md` chose `deny` over `forbid` for the binary
-crate — it plans a scoped, reviewed `unsafe` FFI shim). Wired into
+`#[allow(unsafe_code)]` can override in a specific block.
+
+**Correction (stage 3, 2026-07-31):** this section previously went on to say
+the binary crate uses `deny` because it "plans a scoped, reviewed `unsafe` FFI
+shim." **That rationale has been withdrawn.** `rustix` does expose macOS
+`renameatx_np` via the safe `rustix::fs::renameat_with` +
+`RenameFlags::NOREPLACE` under `#[cfg(apple)]` (established by reading
+`rustix` 1.1.4's source and by compiling and running a
+`#![forbid(unsafe_code)]` program against it on APFS; docs.rs hid the items
+because its default target is Linux). `nix` genuinely does not. So no
+`renamex_np` FFI shim is needed and both crates could use `forbid`. The
+_geiger observation_ above is unaffected — `detoxrs` really does still declare
+`deny` today, so geiger really does still print `?` for it. If the crate moves
+to `forbid`, that `?` becomes `:)`. See `docs/rust-setup-notes.md` for the
+full correction. Wired into
 `security.yml` as `cargo geiger --manifest-path <abs>/crates/detoxrs/Cargo.toml || true` — never gates the build,
 per the guide.
 
@@ -227,6 +253,27 @@ workspace crates, no third-party dependencies). Verify before relying on
 this: run `cargo install cargo-cyclonedx --locked` and `cargo cyclonedx
 --format json` yourself when there's time, or when the first real dependency
 lands and there's something worth seeing in the output.
+
+**Status (stage 3, 2026-07-31) — the SBOM crossed wire, resolved.** This
+document decided granularity ("one SBOM per workspace member", via
+`--output-pattern package`); `docs/rust-setup-release.md` separately asked
+agent C to decide granularity as if it were still open. It was not: the answer
+below is the answer, and `rust-setup-release.md` has been updated to stop
+asking. What that leaves is a real, named gap rather than an open request to a
+finished agent:
+
+> **Gap SBOM-1 — no SBOM ships with a release.** `just sbom` exists
+> (`cargo cyclonedx --format json --all`), but (a) `cargo-cyclonedx` is **not
+> installed** on this machine — verified 2026-07-31, `which cargo-cyclonedx`
+> finds nothing, so `just sbom` fails with "no such command" and the tool's
+> output has still never been seen; and (b)
+> `.github/workflows/release.yml`'s `checksums-and-provenance` job still
+> contains **only a `TODO` comment block**, not a working step — verified by
+> reading the file. Owner of this gap: whoever owns `release.yml`. This blocks
+> the release baseline `README.md` calls non-negotiable ("a published SBOM"),
+> and per `docs/owner-decisions.md` ("a real, publicly packaged tool") that
+> baseline is a real obligation, not an aspiration. It must be closed before
+> the first public release, not after.
 
 **Where this must be published — not my file to write, but exact
 instructions for whoever owns `release.yml`:**
@@ -296,12 +343,24 @@ every tool locally (see sections above) but cannot execute a GitHub Actions
 workflow from here — do not treat "the YAML parses and the local commands
 work" as "the workflow passes in CI."
 
-## Justfile recipes needed (I do not own `justfile` — flagging for another agent)
+## Justfile recipes needed — all DONE (re-verified 2026-07-31)
 
 Per `local-dev.md`'s `ci: fmt lint test audit msrv deny trivy vet geiger`
-pattern referenced in `docs/rust-setup-notes.md`'s checklist, the following
-recipes should be added (I did not add them; task scope excludes
-`justfile`):
+pattern referenced in `docs/rust-setup-notes.md`'s checklist, the recipes below
+were requested by this pass (which did not own `justfile`). **Every one now
+exists** — verified by running `just --list` and reading `justfile`: `audit`,
+`deny`, `vet`, `geiger`, `trivy`, plus `sbom` and `dep-budget`, and
+`just ci` = `gate audit deny vet geiger trivy`. This is a closed request, not
+an open one. Two differences from what was specified below, both deliberate and
+correct:
+
+- **`geiger` uses an absolute `--manifest-path`**, not `-p detoxrs`. `-p` does
+  not work against a virtual manifest and a relative `--manifest-path` is
+  rejected too. `just geiger` was run during this review and **works**.
+- **`trivy` uses `--scanners vuln,secret,misconfig .`** without
+  `--exit-code 1 --skip-dirs target`. Ran clean.
+
+Original request, kept for the record:
 
 ```makefile
 audit:
@@ -323,9 +382,9 @@ vet:
 ```
 
 And extend `gate`/introduce `ci` to chain them alongside the existing
-`fmt-check clippy test msrv`.
+`fmt-check clippy test msrv`. **Done** — see above.
 
-## Checker gap (AGENTS.md) — flagging, not fixing
+## Checker gap (AGENTS.md) — still open
 
 `AGENTS.md` requires adding a `fmt`/`fmt-check` checker in the same change
 that introduces a new file type. This task introduces new TOML files
@@ -337,6 +396,25 @@ have me touch it. Recording the conflict rather than silently resolving it
 either way. Whoever does own `justfile` should add `taplo fmt --check` (or
 equivalent) for TOML and a YAML linter/formatter pass for `.github/workflows/**`
 in the same change that reconciles this.
+
+**Status (stage 3, 2026-07-31) — half closed, half a named gap:**
+
+- **YAML: DONE.** `justfile`'s `prettier_glob` is
+  `**/*.{md,yml,yaml,json}`, so both workflow files are covered by
+  `fmt-check-md` and by `just gate`. Verified by reading `justfile` and by
+  running `just gate` (passes).
+- **Gap TOML-1: TOML is still unchecked, and the `AGENTS.md` contradiction is
+  still live.** Five TOML files exist with no checker (`deny.toml`,
+  `supply-chain/config.toml`, `supply-chain/audits.toml`,
+  `supply-chain/imports.lock`, `.cargo/audit.toml`), and `justfile`'s own
+  comment now argues for deferring ("TOML is deliberately unchecked... Add it
+  when TOML volume justifies it") — which directly contradicts `AGENTS.md`'s
+  unconditional "add a checker for it in the same change... not later." This is
+  a real, unresolved conflict between two governing files, not an oversight:
+  one of the two has to move. Either add `taplo fmt`/`fmt-check` for TOML, or
+  amend `AGENTS.md` to carve out a volume-based exception. Owner: whoever owns
+  `justfile` **and** `AGENTS.md` — neither is this document's to edit, so this
+  is recorded as a gap with a named decision, not a request awaiting a reply.
 
 ## What I ran, for real (2026-07-31)
 
@@ -386,3 +464,29 @@ in the same change that reconciles this.
   whoever picks them up.
 - **`cargo-msrv`.** Not this task's concern — `docs/rust-setup-notes.md`
   already covers why `just msrv` uses `rustup`/`cargo +<version>` directly.
+
+## Review record (stage 3)
+
+Adjudicated 2026-07-31. "Ran" = command executed during this pass; "read" = verified
+by reading the file/source.
+
+| Finding                                                                                       | Reviewer    | Verdict                        | Action / reason                                                                                                                                                                                                                                                         |
+| --------------------------------------------------------------------------------------------- | ----------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cargo geiger -p detoxrs` does not work against a virtual manifest; the doc claimed it did    | L1          | ACCEPT                         | Already corrected in this document and in `justfile`/`security.yml` before this pass (absolute `--manifest-path`). Verified by **running `just geiger`** — works. The doc's original claim that `-p` was the fix was simply wrong and is now labelled as such.          |
+| License allow-list table calls `BSD-3-Clause` "this project's own license"                    | L1, L2, L3  | ACCEPT                         | Table rewritten: `BSD-3-Clause` is dependencies-only; `MIT`/`Apache-2.0` are the project's own. The `/LICENSE` path was fixed before this pass.                                                                                                                         |
+| `cargo deny check` license-not-encountered count is 5                                         | L1          | ACCEPT                         | Re-ran `cargo deny check`: **4** warnings — `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `Unicode-3.0`. Updated, with the reason for the change (relicense) stated.                                                                                                           |
+| Task brief's "<=10 direct / <=45 total" budget vs proposal's "<=11 direct, no transitive cap" | L2          | ACCEPT this document's reading | This document was right and the proposal (read, §7.2) confirms it. Made it the single cross-document authority and noted `just dep-budget` enforces 11 (ran: `0/11`). `rust-setup-notes.md`'s "<= 45" was the stale copy and was struck.                                |
+| "Justfile recipes needed" reads as an open request; all five now exist                        | L1, L2      | ACCEPT                         | Marked DONE from `just --list` (ran), with the two deliberate deviations (`geiger` manifest path, `trivy` flags) called out rather than glossed.                                                                                                                        |
+| Direct-dependency-count check "not added, for whoever owns ci.yml"                            | L2          | ACCEPT                         | Marked DONE as the `dep-budget` recipe chained into `gate` — note it landed in `justfile`, not `ci.yml` as requested, which is worth knowing.                                                                                                                           |
+| TOML/YAML checker gap left under a stale "not fixed" heading                                  | L1, L2      | ACCEPT (split)                 | YAML is genuinely closed (prettier glob covers `yml`/`yaml`). TOML is genuinely open and is now recorded as **Gap TOML-1** with the live `AGENTS.md`-vs-`justfile` contradiction named and a decision owner, instead of a dangling request.                             |
+| SBOM: release.md asks agent C for a granularity decision this doc already made                | L2          | ACCEPT                         | Crossed wire resolved. Granularity was decided here (one SBOM per workspace member). Recorded as **Gap SBOM-1** instead: `release.yml` still has only a `TODO` (read), and `cargo-cyclonedx` is **not installed** (ran `which` — not found), so `just sbom` would fail. |
+| Geiger section justified `deny` over `forbid` via the planned macOS FFI shim                  | (this pass) | ACCEPT                         | Withdrawn in place. `rustix` does expose `renameatx_np` via `renameat_with`/`RenameFlags` under `#[cfg(apple)]`; `nix` does not. The geiger `?`-vs-`:)` observation itself is unaffected and was kept.                                                                  |
+| Zero-dependency honesty caveat overstates uselessness of the tooling                          | —           | REJECT                         | Not a reviewer finding; considered and rejected as an edit. L3 rated this document's caveats as exemplary. Softening "a clean result proves the tool is configured, not that anything is safe" would trade accuracy for tidiness. Left verbatim.                        |
+| Rewrite the "Unexecuted" workflow caveats now that local tools all pass                       | —           | REJECT                         | Explicitly not done. Neither `security.yml` nor `supply-chain.yml` has ever run in GitHub Actions, and local passes are not CI passes. The caveat stands unchanged.                                                                                                     |
+
+**Files outside this document that carry stale supply-chain facts** (not edited here):
+`CONTRIBUTING.md`'s recipe table still documents `just geiger` as
+`cargo geiger -p detoxrs`, which is the invocation that does not work.
+`CONTRIBUTING.md` and `SECURITY.md` also still carry the withdrawn `rustix` unsafe
+rationale, along with `crates/detoxrs/src/main.rs` and
+`docs/research/00-proposal-rust-detox-successor.md`.

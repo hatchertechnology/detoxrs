@@ -16,16 +16,34 @@ Foundation-only pass: workspace scaffolding, no application logic. Written again
   rustup) — passes.
 - **Toolchain file pins 1.96.1** (the latest verified-working stable, matching the
   environment), separate from the MSRV. `rust-toolchain.toml` documents this split.
-- **Unsafe-code policy: `forbid` in `detoxrs-core`, `deny` (not `forbid`) in `detoxrs`.**
+- **Unsafe-code policy: `forbid` in `detoxrs-core`, `deny` in `detoxrs` — and the
+  original justification for that asymmetry is withdrawn (corrected 2026-07-31).**
   The core crate is pure by design and has no future need for `unsafe`. The binary
-  crate will eventually contain a hand-written macOS `libc` FFI shim (proposal §5.4,
-  §7.1 `fsops/macos.rs`: `renamex_np` + a `getattrlist`/`VOL_CAP_INT_RENAME_EXCL` probe,
-  because neither `rustix` nor `nix` expose it). `forbid` cannot be downgraded by any
-  later `#[allow(unsafe_code)]`, however narrow — it would have to be deleted outright
-  the day that shim lands. `deny` gets the same "unsafe requires deliberate, reviewed
-  opt-in" default today, and when `fsops/macos.rs` is written it gets a scoped
-  `#[allow(unsafe_code)]` with a comment naming the syscall and the safety argument.
-  Documented in `crates/detoxrs/src/main.rs`.
+  crate was set to `deny` rather than `forbid` on the premise that it would
+  eventually need a hand-written macOS `libc` FFI shim for `renamex_np` (proposal
+  §5.4, §7.1 `fsops/macos.rs`) "because neither `rustix` nor `nix` expose it."
+  **That premise is false for `rustix`.** `rustix` does expose macOS
+  `renameatx_np` through the safe wrapper `rustix::fs::renameat_with` with
+  `RenameFlags::NOREPLACE`/`EXCHANGE`, gated on `#[cfg(apple)]` — established by
+  reading `rustix` 1.1.4's source (`src/fs/at.rs`,
+  `src/backend/libc/fs/syscalls.rs`) and by compiling and running a
+  `#![forbid(unsafe_code)]` program against it on APFS. docs.rs hides these items
+  because its default build target is Linux, which is how the original reading went
+  wrong. `nix` genuinely does not expose it.
+  Consequences:
+  - The stated reason for choosing `deny` over `forbid` in `crates/detoxrs` **does
+    not hold**. No `renamex_np` FFI shim is needed; `rustix` covers it from safe
+    code, so both crates could carry `#![forbid(unsafe_code)]` today.
+  - The only remaining shim candidate is the `getattrlist` /
+    `VOL_CAP_INT_RENAME_EXCL` capability probe, which `rustix` does not wrap. That
+    is a separate, narrower question and is not by itself a decided reason to keep
+    `deny`; if it is the reason, it must be stated as such rather than resting on
+    the withdrawn `renamex_np` claim.
+  - `crates/detoxrs/src/main.rs` still declares `#![deny(unsafe_code)]` and still
+    carries the withdrawn rationale in its doc comment. Changing the attribute and
+    the comment is a code change outside this note's scope; it is tracked in the
+    stage-3 review record below along with the other files that repeat the same
+    stale claim (`CONTRIBUTING.md`, `SECURITY.md`, the proposal).
 - **Lints: `[workspace.lints.clippy] all/pedantic/nursery = "warn"`**, inherited by both
   crates via `[lints] workspace = true`; CI-equivalent enforcement is `-D warnings` on
   the command line (`just clippy`), not baked into the lint table, so local `cargo
@@ -53,28 +71,42 @@ clippy` still just warns.
 - `cargo fmt --check` — passes (Rust files only; this check is scoped to `*.rs`).
 - `cargo tree --workspace` — **4 lines / effectively 2 unique crates**
   (`detoxrs` -> `detoxrs-core`, plus `detoxrs-core` listed standalone since it's also a
-  workspace root). Budget is <= 45; nowhere close, as expected with zero non-dev
-  dependencies added yet.
-- `just --list` — lists `build`, `clippy`, `fmt`, `fmt-check`, `fmt-check-file`,
-  `fmt-file`, `gate`, `msrv`, `test`.
-- `just gate` (`fmt-check`, `clippy`, `test`, `msrv`) — **clippy/test/msrv pass**;
-  `fmt-check` fails on `npx prettier --check "**/*.md"` reporting drift in
-  `docs/research/00-proposal-rust-detox-successor.md`, `01-detox-current-behavior.md`,
-  `02-detox-issues-and-demand.md`. Those are files another agent is concurrently
-  editing (see `git status` at task start) and are outside this agent's scope —
-  per `AGENTS.md`, reporting rather than fixing. Not caused by anything added here.
+  workspace root). **Budget correction (2026-07-31):** the only dependency ceiling
+  that exists is **<= 11 direct dependencies** (proposal §7.2), enforced by
+  `just dep-budget` (currently reports `0/11 direct dependencies: (none)`). The
+  earlier "<= 45 total crates" figure stated here was wrong: proposal §7.2
+  deliberately **struck** the total-transitive cap as unmeasured ("a number
+  asserted without measuring is not a budget"). Do not reintroduce it.
+- `just --list` — the justfile has grown since this pass. It now lists 21 recipes:
+  `audit`, `build`, `ci`, `clippy`, `dep-budget`, `deny`, `fmt`, `fmt-check`,
+  `fmt-check-file`, `fmt-check-md`, `fmt-check-rust`, `fmt-file`, `fmt-md`,
+  `fmt-rust`, `gate`, `geiger`, `msrv`, `sbom`, `test`, `trivy`, `vet`.
+- `just gate` (`fmt-check`, `clippy`, `test`, `msrv`, `dep-budget`) — **passes**,
+  re-run 2026-07-31 during the stage-3 review (exit 0). At the time this note was
+  first written it failed on `fmt-check-md` prettier drift in `docs/research/*.md`
+  that other agents were concurrently editing; that drift has since been formatted
+  away. Note that `fmt-check` covers `**/*.{md,yml,yaml,json}`, not just `**/*.md`.
+  **Design question raised, not unilaterally changed:** `gate` is documented as
+  "what a developer runs before pushing," yet it fails on Markdown/YAML/JSON
+  formatting anywhere in the repo — so a Rust change can be blocked by an unrelated
+  docs edit. `fmt-check-rust` already exists as the Rust-only half.
+  **Recommendation for the justfile owner:** make `gate` depend on
+  `fmt-check-rust` and leave repo-wide `fmt-check` to `ci` / a docs recipe. The
+  justfile is shared, so this is a recommendation, not a change made here.
 - `just fmt-check-file crates/detoxrs-core/README.md crates/detoxrs/README.md` — passes.
 
-## Deferred guide recommendations (not implemented — no code exists yet to need them)
+## Deferred guide recommendations (status re-verified 2026-07-31)
 
-- `cargo-msrv`, `cargo-deny`, `cargo-vet`, `cargo-audit`, `cargo-geiger`, Trivy: no
-  `deny.toml`/CI wiring added. `just msrv` uses `rustup`/`cargo +<version>` directly
-  instead of `cargo msrv verify` — installing and configuring `cargo-msrv` is CI/tooling
-  territory for another agent; today's recipe needs only the toolchain already
-  installed.
-- `just ci`/`gate` does not chain `audit`, `deny`, `trivy`, `vet`, `geiger` — those
-  recipes don't exist because the tools aren't wired up yet (another agent's scope per
-  the task brief: CI, supply-chain).
+- ~~`cargo-deny`, `cargo-vet`, `cargo-audit`, `cargo-geiger`, Trivy: no `deny.toml`/CI
+  wiring added.~~ **DONE.** `deny.toml`, `supply-chain/`, `.cargo/audit.toml`,
+  `.github/workflows/security.yml` and `.github/workflows/supply-chain.yml` all exist;
+  see `docs/rust-setup-supply-chain.md`. `cargo-msrv` itself is still **not** used:
+  `just msrv` uses `rustup`/`cargo +<version>` directly, which needs only the
+  toolchain already installed. That remains a deliberate choice, not a gap.
+- ~~`just ci`/`gate` does not chain `audit`, `deny`, `trivy`, `vet`, `geiger`.~~
+  **DONE.** `just ci` is `gate audit deny vet geiger trivy`; `gate` is
+  `fmt-check clippy test msrv dep-budget`. `just sbom` and `just dep-budget` also
+  exist now.
 - Dev-dependencies from `testing.md`/proposal §8 (`proptest`, `insta`, `trycmd`,
   `assert_cmd`, `criterion`) are **not** added. There is no transform/plan logic yet to
   test against; adding them now would be dependencies with nothing exercising them.
@@ -94,22 +126,56 @@ clippy` still just warns.
   conflict** — relicensed to dual MIT OR Apache-2.0 on 2026-07-31, so the project now
   matches the guide.
 
-## Checklist for later agents
+## Checklist for later agents (status re-verified 2026-07-31)
 
-- [ ] CI: GitHub Actions workflows (build matrix, clippy, fmt, msrv job pinned to
-      1.93.0, per `msrv.md`'s job example).
-- [ ] Supply chain: `deny.toml` (`cargo-deny`), `cargo-vet` policy/audits, `cargo-audit`
-      wiring, Trivy scan; extend `just gate`/`ci` to chain them per `local-dev.md`'s
-      `ci: fmt lint test audit msrv deny trivy vet geiger` pattern.
-- [ ] Security scanning: `cargo-geiger` (informational; trivially zero right now since
-      `unsafe_code` is forbidden/denied everywhere).
-- [ ] Release automation: `release-please` config, Conventional Commits enforcement
-      beyond the `AGENTS.md` note, `cargo publish` posture (crate is not intended for
-      independent publish per §7.1 — confirm that stays true), cross-platform binary
-      builds.
-- [ ] Governance: `SECURITY.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, dual-license
-      files — **done**: dual MIT OR Apache-2.0 as of 2026-07-31.
-- [ ] Dependency management: Dependabot/Renovate config once real dependencies exist.
+- [x] CI: GitHub Actions workflows (build matrix, clippy, fmt, msrv job pinned to
+      1.93.0). **DONE** — `.github/workflows/ci.yml`, `docs/rust-setup-ci.md`.
+- [x] Supply chain: `deny.toml`, `cargo-vet` policy/audits, `cargo-audit` wiring,
+      Trivy scan; `just gate`/`ci` chaining. **DONE** —
+      `docs/rust-setup-supply-chain.md`.
+- [x] Security scanning: `cargo-geiger`. **DONE** — `just geiger` (needs an absolute
+      `--manifest-path`; `-p` does not work against a virtual manifest).
+- [x] Release automation: `release-please` config, `cargo publish` posture (still
+      "do not publish", per §7.1), cross-platform binary builds. **DONE** —
+      `.github/workflows/release.yml`, `docs/rust-setup-release.md`. Note the
+      **tooling conflict**: the guide prescribes `release-please`, proposal §9.4
+      chose `cargo-dist` + `release-plz`. `release-please` is the deliberate interim
+      choice and `docs/rust-setup-release.md` recommends switching before the v1.0
+      packaging milestone — the choice was not uncontested, and a human still owes
+      that decision.
+- [x] Governance: `SECURITY.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`,
+      dual-license files. **DONE** — dual MIT OR Apache-2.0 as of 2026-07-31. The
+      contact and response-time placeholders in `SECURITY.md` /
+      `CODE_OF_CONDUCT.md` are **not** done and are real obligations before the
+      first public release (see `docs/owner-decisions.md`).
+- [x] Dependency management: Dependabot config. **DONE** — `.github/dependabot.yml`.
 - [ ] Add `proptest`/`insta`/`trycmd`/`assert_cmd`/`criterion` dev-dependencies and the
-      actual transform/plan modules they will test, per proposal §8 — deliberately not
-      done here since there is no logic yet.
+      actual transform/plan modules they will test, per proposal §8 — still
+      **OUTSTANDING**, deliberately: there is still no application logic to test.
+- [ ] TOML formatting checker (`taplo` or equivalent). Still **OUTSTANDING** and
+      still in tension with `AGENTS.md`'s "add a checker in the same change" rule —
+      five TOML files now exist unchecked. See `docs/rust-setup-supply-chain.md`.
+
+## Review record (stage 3)
+
+Adjudicated 2026-07-31. "Ran" = command executed during this pass; "read" = verified
+by reading the file/source.
+
+| Finding                                                                                   | Reviewer | Verdict | Action / reason                                                                                                                                                                                                                                                                                    |
+| ----------------------------------------------------------------------------------------- | -------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deny`-over-`forbid` rationale rests on "neither `rustix` nor `nix` expose `renamex_np`"  | L1, L2   | ACCEPT  | Rewrote the unsafe-policy entry. `rustix` **does** expose `renameatx_np` via `renameat_with`/`RenameFlags` under `#[cfg(apple)]` (read: `rustix` 1.1.4 source; a `forbid(unsafe_code)` program was compiled and run on APFS). `nix` does not. Rationale withdrawn; both crates could use `forbid`. |
+| `main.rs` repeats the same withdrawn rationale and drives `#![deny(unsafe_code)]` from it | L1       | ACCEPT  | Out of this document's scope (code file). Recorded here and listed for the propagation pass; not silently left unmentioned.                                                                                                                                                                        |
+| "Budget is <= 45" total transitive crates                                                 | L2       | ACCEPT  | Struck. Proposal §7.2 (read) removed the transitive cap as unmeasured; the only cap is <= 11 direct, enforced by `just dep-budget` (ran: `0/11`).                                                                                                                                                  |
+| `just --list` recipe list stale (9 recipes claimed, 20 exist)                             | L1       | ACCEPT  | Updated from `just --list` (ran).                                                                                                                                                                                                                                                                  |
+| `just gate` failure attributed to three named research docs that are now clean            | L1       | ACCEPT  | Re-ran `just gate`: **passes, exit 0**. Recorded as passing today with the historical failure kept as context, rather than deleting the record.                                                                                                                                                    |
+| Prettier scope stated as `**/*.md`                                                        | L1       | ACCEPT  | Corrected to `**/*.{md,yml,yaml,json}` (read: `justfile` `prettier_glob`).                                                                                                                                                                                                                         |
+| Deferred section and checklist describe finished work as pending                          | L1, L2   | ACCEPT  | Both sections re-verified item by item against `just --list` and the repo tree, and marked DONE / OUTSTANDING.                                                                                                                                                                                     |
+| Release-automation checklist item silent on the release-please vs cargo-dist conflict     | L2       | ACCEPT  | Added the pointer; the interim choice is now visibly an interim choice.                                                                                                                                                                                                                            |
+| `gate` couples a Rust pre-push check to repo-wide Markdown formatting                     | L1 (obs) | ACCEPT  | Recorded as a design question with a concrete recommendation (`gate` -> `fmt-check-rust`). Not applied: the justfile is shared and this is not this document's call.                                                                                                                               |
+| MSRV, edition, layout, license, build/test/clippy/fmt claims                              | L1       | CONFIRM | Re-ran `just gate` (build, test, clippy, fmt-rust, msrv, dep-budget all pass). No change needed.                                                                                                                                                                                                   |
+| Placeholders should be tidied into commitments                                            | —        | REJECT  | Not a reviewer request, and explicitly refused: L3 found 30 placeholders all correctly guarded. Nothing here was converted from "placeholder" to "done", and no workflow is described as having run.                                                                                               |
+
+**Files outside this document that still carry the withdrawn `rustix` rationale**
+(handled by a separate propagation pass, not edited here): `CONTRIBUTING.md`,
+`SECURITY.md`, `crates/detoxrs/src/main.rs`,
+`docs/research/00-proposal-rust-detox-successor.md`.

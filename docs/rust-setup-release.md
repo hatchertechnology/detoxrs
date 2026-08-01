@@ -94,11 +94,22 @@ package at `"."` (`release-type: "rust"`, `package-name: "detoxrs"`). It does
 **not** add a second `packages` entry for `crates/detoxrs-core`. Adding one
 would tell release-please to track that crate as an independently versioned,
 independently changelogged component, which contradicts both the existing
-Cargo-level version lock and the proposal's decision. If a human later
-decides to publish `detoxrs-core` as a standalone crate with its own
-versioning, that is the point to add a second `packages` entry (and probably
-move to `release-plz`, which is more workspace-aware -- see the conflict
-section above).
+Cargo-level version lock and the proposal's decision.
+
+**This is today's correct choice, not a permanent constraint.** Neither the
+workspace version lock nor release-please's single-package declaration
+prevents splitting the crates later; they just encode the decision that is in
+force now. If a human decides to publish `detoxrs-core` as a standalone crate
+with its own version, the upgrade path is two concrete edits:
+
+1. Remove `version.workspace = true` from `crates/detoxrs-core/Cargo.toml` (and
+   give it its own `version`) to break the Cargo-level lock.
+2. Add a second `packages` entry for `crates/detoxrs-core` to
+   `release-please-config.json`.
+
+At that point also consider moving to `release-plz`, which is more
+workspace-aware (see the conflict section above). Nothing here needs to be
+undone as a mistake to get there.
 
 `bump-minor-pre-major: true` is set because the proposal's roadmap
 (section 10) plans v0.1 -> v0.2 -> v0.3 -> v1.0 with breaking config/CLI
@@ -160,6 +171,26 @@ FreeBSD/NetBSD/OpenBSD are compile-checked, not release targets).
 | Debian/Fedora native packages | --                          | **No**    | Proposal 9.4 explicitly orders these last, "post-1.0, once the dep tree is stable" (roadmap section 10). Not release-workflow scope yet                                        |
 | Homebrew tap / Nix / AUR      | --                          | **No**    | Proposal 9.4 items 2-4. Downstream of the GitHub Release existing at all; separate future work, likely alongside a `cargo-dist`/`release-plz` migration (see conflict section) |
 
+**Owner-decision compliance for the Windows target
+(`docs/owner-decisions.md`, 2026-07-31 "Test hardware"):** the owner has no
+Windows machine and no NTFS or exFAT volume, so Windows "stays a best-effort
+tier: it must compile and unit-test in CI, but no filesystem behavior is
+asserted." Shipping an `x86_64-pc-windows-msvc` archive is consistent with
+that — proposal §9.4 asks for it, and it is built and unit-tested on a hosted
+runner — but the artifact carries **no verified Windows filesystem behavior**.
+Nothing in this document claims otherwise, and release notes and `README.md`
+must not either: no statement about reserved names, path length, or rename
+atomicity on NTFS/exFAT may be presented as verified (proposal §11 spikes 3
+and 4 are explicitly still open). `aarch64-pc-windows-msvc` stays excluded.
+
+**Packaging note (2026-07-31):** the Unix and PowerShell packaging steps copy
+`README.md`, `LICENSE-MIT` and `LICENSE-APACHE` into the staging directory.
+They previously copied a single `LICENSE` file, which the 2026-07-31 relicense
+deleted -- under `set -euo pipefail` that would have hard-failed the first real
+release build. Fixed in commit `c5a0f85`; both packaging paths now name the two
+dual-license files. This was never exercised by a real run (see below), but the
+files it names do exist.
+
 **Known risk I could not resolve without running it:** `cargo-auditable`
 (which the guide recommends to embed the dependency tree in the binary) is
 only wired up for the five natively-built targets. Whether `cargo auditable
@@ -219,26 +250,41 @@ current verification flow. **This is the content a human should paste into
 -- not written into `README.md` in this pass, since that file isn't this
 agent's to edit.
 
-### What I need from agent C (SBOM)
+### SBOM: the questions are answered, the wiring is not — Gap SBOM-1
 
-`release.yml`'s `checksums-and-provenance` job has an explicit `TODO` block
-(not a broken step -- deliberately left as a comment so the workflow stays
-syntactically valid and doesn't fail on a missing artifact) asking for:
+This section previously asked agent C to decide SBOM tooling, format, and
+granularity. **Those questions are all answered** (verified 2026-07-31 by
+reading `docs/rust-setup-supply-chain.md`), so this is no longer a request to
+another agent — it is a single named gap with an owner:
 
-1. A CycloneDX JSON SBOM generated with `cargo cyclonedx --format json
---describe binaries` (or equivalent) against the _release build's_ lock
-   file/feature set -- not a report that includes dev-only dependencies.
-2. Produced as a GitHub Actions workflow artifact (or callable step) with a
-   stable, documented name I can reference in a `download-artifact` step.
-3. A decision from agent C on granularity: one SBOM per target, or one SBOM
-   for the whole release. Whichever it is, this job's copy step and the
-   verification docs above need to name it accordingly.
+| Question    | Answer                                                                                                                                                          |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tool        | `cargo-cyclonedx` (chosen over `cargo-sbom`)                                                                                                                    |
+| Format      | CycloneDX JSON                                                                                                                                                  |
+| Granularity | **One SBOM per workspace member**, via `cargo cyclonedx --format json --all --output-pattern package` -> one `<crate>.cdx.json` per member. Not one per target. |
+| Freshness   | Regenerate on every release from a `--locked` build in the same job that builds the release binaries                                                            |
 
-Until that lands, releases will ship checksums and provenance but no SBOM --
-a real gap against the guide's non-negotiable baseline
-(`README.md`: "a published SBOM, release provenance or signatures,
-checksums, and a documented way to verify them"). Flagging it rather than
-faking a step that references an artifact that doesn't exist yet.
+> **Gap SBOM-1 (owner: this file, `release.yml`).** No SBOM ships. Two things
+> are missing, both verified this pass:
+>
+> 1. `.github/workflows/release.yml`'s `checksums-and-provenance` job contains
+>    **only a `TODO` comment block** where the SBOM step belongs (read the
+>    file). It is deliberately a comment so the workflow stays valid and does
+>    not fail on a missing artifact — but that means it is not wired, and
+>    calling it "waiting on agent C" would be wrong: nothing is waiting on
+>    anyone. The command to run is in the table above.
+> 2. `cargo-cyclonedx` is **not installed** on this machine (ran
+>    `which cargo-cyclonedx` — not found), so `just sbom` currently fails with
+>    "no such command" and the tool's actual output has never been seen by
+>    anyone on this project. Install and run it before trusting the invocation.
+>
+> Releases today would ship checksums and provenance but no SBOM -- a real gap
+> against the guide's non-negotiable baseline (`README.md`: "a published SBOM,
+> release provenance or signatures, checksums, and a documented way to verify
+> them"). Per `docs/owner-decisions.md` ("Ambition: a real, publicly packaged
+> tool" -- the release machinery **stays**, SBOM included), this must be closed
+> before the first public release. Still flagging it rather than faking a step
+> that references an artifact that doesn't exist yet.
 
 ### `cargo publish` posture: not wired up, deliberately
 
@@ -329,32 +375,69 @@ half-build now.
   secrets before any of this can run at all; (4) running the verification
   commands above against a real released archive once one exists.
 
-## Deferred / needs a human
+## Deferred / needs a human (status re-verified 2026-07-31)
 
-- Create the GitHub App used for release-please's token, and add
-  `RELEASE_APP_ID` / `RELEASE_APP_PRIVATE_KEY` as repository secrets.
-  Scope it to contents + pull-requests write only.
-- Create the `release` GitHub Environment (Settings -> Environments) with
-  required reviewers, per the guide's "protected release environment"
-  requirement. Nothing in `build`/`checksums-and-provenance` can run without
-  it existing.
-- Decide, before the v1.0 packaging milestone, whether to switch to
-  `release-plz` + `cargo-dist` per proposal 9.4 (see the conflict section
-  above) -- this is a real decision, not busywork; recommendation given.
-- Wire in agent C's SBOM artifact (see "What I need from agent C" above).
-- Once a release actually exists, paste the verification commands above into
-  `README.md`'s release/verification section (not done this round; not this
-  agent's file).
-- Justfile recipes another agent should add (not added here -- not this
-  agent's file to edit):
-  - `release-dry-run`: something like
-    `npx release-please release-pr --repo-url=... --dry-run --token=...`
-    or the `release-plz` equivalent, so a maintainer can preview the next
-    version bump/changelog locally before pushing.
-  - `checksums`: `sha256sum target/release/detoxrs > SHA256SUMS` for local
-    sanity-checking before trusting CI's output.
-  - Whatever recipe wraps agent C's local SBOM generation
-    (`cargo cyclonedx ...`), so `just gate`/`just ci` can eventually include
-    it once real dependencies and a real release exist.
-- Homebrew tap, Nix flake, AUR package (proposal 9.4 items 2-4): all
-  downstream of a first real GitHub Release existing; not started.
+- **OUTSTANDING (human).** Create the GitHub App used for release-please's
+  token, and add `RELEASE_APP_ID` / `RELEASE_APP_PRIVATE_KEY` as repository
+  secrets. Scope it to contents + pull-requests write only. Correctly
+  fail-closed until then.
+- **OUTSTANDING (human).** Create the `release` GitHub Environment
+  (Settings -> Environments) with required reviewers, per the guide's
+  "protected release environment" requirement. Nothing in
+  `build`/`checksums-and-provenance` can run without it existing.
+- **OUTSTANDING (human).** Decide, before the v1.0 packaging milestone, whether
+  to switch to `release-plz` + `cargo-dist` per proposal 9.4 (see the conflict
+  section above) -- a real decision, not busywork; recommendation given.
+- **OUTSTANDING — Gap SBOM-1**, and no longer a question for anyone: tool,
+  format, granularity and freshness are all decided (see the SBOM section
+  above). What remains is wiring the step into `release.yml` and installing
+  `cargo-cyclonedx`. Owner: `release.yml`.
+- **OUTSTANDING.** `README.md` has no release-verification section — confirmed
+  by reading the file 2026-07-31. The commands above are the content to paste
+  in. Per `docs/owner-decisions.md`, "a documented way to verify them" is part
+  of the baseline this project has committed to as a real public tool, so this
+  is required before the first public release, not optional polish.
+- Justfile recipes this document asked another agent for — status verified
+  against `just --list`:
+  - **OUTSTANDING.** `release-dry-run` (e.g. `npx release-please release-pr
+--dry-run ...` or the `release-plz` equivalent), so a maintainer can preview
+    the next version bump/changelog locally before pushing. Does not exist.
+  - **OUTSTANDING.** `checksums`
+    (`sha256sum target/release/detoxrs > SHA256SUMS`) for local
+    sanity-checking before trusting CI's output. Does not exist.
+  - **DONE.** `just sbom` exists (`cargo cyclonedx --format json --all`) and is
+    chained into `just ci`. It is not in `just gate`, and it currently fails
+    because `cargo-cyclonedx` is not installed here — see Gap SBOM-1.
+- **OUTSTANDING (human).** Homebrew tap, Nix flake, AUR package (proposal 9.4
+  items 2-4): all downstream of a first real GitHub Release existing; not
+  started.
+- **Gap RELEASE-YML-1 (cosmetic, owner: `release.yml`).** Two `uses:` lines
+  (the `actions/checkout` pins in the `release-please` and
+  `checksums-and-provenance` jobs) carry the inline comment `# v4.2.2`, but the
+  pinned SHA `11d5960a326750d5838078e36cf38b85af677262` actually resolves to
+  tag **v4.4.0** — which is how `ci.yml` correctly labels the same SHA. The
+  commit is right and consistent across workflows; only the human-readable
+  annotation is wrong, and it would mislead anyone auditing or bumping the pin.
+  Not fixed here: `release.yml` was outside this pass's edit scope.
+
+## Review record (stage 3)
+
+Adjudicated 2026-07-31. "Ran" = command executed during this pass; "read" = verified
+by reading the file.
+
+| Finding                                                                                           | Reviewer      | Verdict | Action / reason                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------------------------------------------- | ------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `release.yml` packaging copied a deleted `LICENSE` on both paths; would hard-fail the first build | L1 (CRITICAL) | ACCEPT  | Fixed before this pass in commit `c5a0f85` (both paths now copy `LICENSE-MIT` and `LICENSE-APACHE` — read the file, lines 173 and 187). This document now describes the fixed state and records why the bug existed, instead of being silent about it.                               |
+| `actions/checkout` pin labelled `# v4.2.2` but the SHA is `v4.4.0`                                | L1            | ACCEPT  | Confirmed by reading `release.yml` (lines 130, 212) against `ci.yml`'s correct label. Recorded as **Gap RELEASE-YML-1** with an owner; not fixed, since `release.yml` is outside this pass's edit scope. Commit itself is correct.                                                   |
+| "What I need from agent C (SBOM)" asks a question `rust-setup-supply-chain.md` already answered   | L2, L3        | ACCEPT  | Section rewritten. Tool/format/granularity/freshness tabulated as decided; the residue recorded as **Gap SBOM-1** with a named owner. Also verified `cargo-cyclonedx` is **not installed** (ran `which`) so `just sbom` would fail today.                                            |
+| Lines 89-101 read as if the single-package release design were a permanent constraint             | L3            | ACCEPT  | Rewrote to say plainly it is today's correct choice, and gave the two-step upgrade path (drop `version.workspace`, add a second `packages` entry).                                                                                                                                   |
+| `release-dry-run` / `checksums` justfile recipes never implemented                                | L2            | ACCEPT  | Verified absent (ran `just --list`); marked OUTSTANDING rather than left as a silent request. `just sbom` marked DONE.                                                                                                                                                               |
+| `README.md` release-verification section still missing                                            | L2            | ACCEPT  | Verified absent (read `README.md` — no `SHA256SUMS`/`gh attestation verify` content). Marked OUTSTANDING and tied to the owner decision that makes it an obligation.                                                                                                                 |
+| Windows release target contradicts owner-decisions                                                | L2            | REJECT  | L2 concluded no contradiction and this pass agrees: proposal §9.4 asks for the target, and no verified Windows filesystem behavior is claimed anywhere here. Rather than drop the target, added an explicit compliance note forbidding such a claim in release notes or `README.md`. |
+| "Workflow has never executed" sections should be summarised again / are a release-readiness risk  | L3            | REJECT  | L3 itself recorded "no change to document required." The sections are already explicit and duplicating them invites drift. Left verbatim, and nothing in this pass claims any part of `release.yml` has run.                                                                         |
+| Action SHA table, `cargo-auditable` guard, target matrix vs `release.yml`                         | L1            | CONFIRM | L1 verified every SHA against `git ls-remote` and matched the matrix and the `if: ${{ !matrix.cross }}` guard against the file. No change.                                                                                                                                           |
+
+**Still not claimed, deliberately:** `release.yml` has never executed. No push to `main`
+has triggered it, no archive has been built, no attestation exists, and the verification
+commands above have never been run against a real artifact. Nothing in this pass changed
+any of that.

@@ -22,6 +22,18 @@ Written against `wiki/rust/ideal-project-setup`'s `governance.md`,
 
 ## Placeholders a human must fill in (do not treat as done)
 
+**Escalated 2026-07-31 by owner decision — these are obligations, not
+nice-to-haves.** `docs/owner-decisions.md` ("Ambition: a real, publicly
+packaged tool") confirms this is the successor detox users are meant to migrate
+to, not an internal utility, and states directly that `SECURITY.md`'s
+response-time table and fallback contact and `CODE_OF_CONDUCT.md`'s enforcement
+contact are **"real commitments to real third parties and must be filled in by
+a human before the first public release."** So items 1 and 2 below are release
+blockers, not backlog. The instruction that goes with that is unchanged and
+still binding: **they remain marked placeholders until a human makes them real.
+Do not invent them**, and do not soften the "do not treat as done" guards to
+make the documents look finished.
+
 1. **Security-response contact/timeline (`SECURITY.md`).** GitHub private
    vulnerability reporting is wired up as the real, working channel
    (`https://github.com/hatchertechnology/detoxrs/security/advisories/new`).
@@ -61,6 +73,13 @@ Written against `wiki/rust/ideal-project-setup`'s `governance.md`,
 The section below is the state as written before that decision, retained as a
 record. `CONTRIBUTING.md` has since been updated to the standard dual-license
 contribution clause, plus an explicit rule against copying upstream code.
+
+Reading note: every reference to a `LICENSE` file below is **historical**. That
+file no longer exists — it was deleted by the relicense and replaced by
+`LICENSE-MIT` and `LICENSE-APACHE`. The "if the license conflict is later
+resolved" paragraph describes work that has since been done, so it is a record
+of a prediction that came true, not an open action item. Nothing below needs
+following as an instruction.
 
 Per `docs/rust-setup-notes.md`, the repo `LICENSE` is BSD-3-Clause; the guide
 (`governance.md`) recommends the Rust-ecosystem convention of dual
@@ -133,13 +152,34 @@ not-yet-wired-up rather than described as active.
   this agent's scope per the task brief (owned by other agents/humans);
   `CONTRIBUTING.md` and `SECURITY.md` both state plainly that these are not
   wired up yet rather than describing them as available checks.
+  **Status update 2026-07-31:** most of this has since landed —
+  `cargo-deny`/`cargo-vet`/`cargo-audit`/Trivy/`cargo-geiger` are wired into
+  `justfile` recipes and into `.github/workflows/security.yml` and
+  `supply-chain.yml`; `release-please` and provenance are wired into
+  `release.yml`. Two consequences for this document's scope. (1) `SECURITY.md`
+  still says dependency scanning is "not yet done" (and points at
+  `docs/rust-setup-notes.md`); that is now stale and should be corrected by
+  whoever owns `SECURITY.md`. (2) **SBOM is the exception** — it is still not
+  wired (`release.yml` has only a `TODO`, and `cargo-cyclonedx` is not
+  installed), so nothing in the governance documents should describe a published
+  SBOM as available. See Gap SBOM-1 in `docs/rust-setup-release.md`. Note also
+  that no GitHub Actions workflow in this repo has ever run, so none of the
+  above may be described as a passing check.
 
 ## Verification performed
 
 - `just --list` confirmed the only recipes referenced in `CONTRIBUTING.md`
   (`build`, `clippy`, `fmt`, `fmt-check`, `fmt-check-file`, `fmt-file`, `msrv`,
   `gate`, `test`) actually exist; no reference to `ci`, `audit`, `deny`,
-  `trivy`, `vet`, or `geiger` was made, since those recipes don't exist.
+  `trivy`, `vet`, or `geiger` was made, since those recipes didn't exist.
+  **Superseded 2026-07-31:** `CONTRIBUTING.md` has since been edited by another
+  pass and now documents `just dep-budget`, `audit`, `deny`, `vet`, `geiger`,
+  `trivy`, `sbom` and `ci` in its recipe table. Re-verified this pass: every one
+  of those recipes exists (`just --list`), so the table is accurate and the
+  "those recipes don't exist" note above is obsolete. One stale detail remains
+  and is **not** this document's to fix: `CONTRIBUTING.md`'s table renders
+  `just geiger` as `cargo geiger -p detoxrs`, but `-p` does not work against a
+  virtual manifest — the recipe actually uses an absolute `--manifest-path`.
 - `just fmt-file` / `just fmt-check-file` run on every markdown file created
   (`SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
   `.github/PULL_REQUEST_TEMPLATE.md`) — passes after one `fmt-file` pass
@@ -154,3 +194,23 @@ not-yet-wired-up rather than described as active.
   which is valid syntax and matches the stated repo owner. No automated
   CODEOWNERS linter was available in this environment, so this was a manual
   read against the documented grammar rather than a tool run.
+
+## Review record (stage 3)
+
+Adjudicated 2026-07-31. "Ran" = command executed during this pass; "read" = verified
+by reading the file.
+
+| Finding                                                                                             | Reviewer | Verdict               | Action / reason                                                                                                                                                                                                                                                                                              |
+| --------------------------------------------------------------------------------------------------- | -------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Verification note claims `CONTRIBUTING.md` references no `ci`/`audit`/`deny`/`trivy`/`vet`/`geiger` | L1       | ACCEPT                | Read `CONTRIBUTING.md`: its recipe table now documents eight supply-chain recipes. Marked the old note superseded and re-verified every recipe exists (ran `just --list`). Also flagged that the table's `just geiger` command text is stale (`-p detoxrs` does not work) — not this document's file to fix. |
+| Placeholder section doesn't carry `owner-decisions.md`'s "real commitments" urgency                 | L2       | ACCEPT                | Added the escalation up front: items 1 and 2 are release blockers per the owner decision, while the "remain marked placeholders / do not invent them" guard is restated explicitly so the escalation can't be misread as licence to fabricate.                                                               |
+| Historical `LICENSE` references (lines 65-79) read as live action items                             | L3       | MODIFY                | L3 offered "rewrite the paths" or "leave as-is". Did neither exactly: rewriting a section explicitly retained as a pre-decision record would falsify the record. Added a reading note stating `LICENSE` no longer exists and that the paragraph describes work already done.                                 |
+| Deferred CI/supply-chain/release items still described as not wired up                              | L1, L2   | ACCEPT                | Marked what landed, and named the two live consequences: `SECURITY.md`'s "dependency scanning not yet wired" line is now stale, and SBOM remains genuinely unwired (Gap SBOM-1).                                                                                                                             |
+| Placeholders in `SECURITY.md`/`CODE_OF_CONDUCT.md` are still genuinely placeholders                 | L1, L3   | CONFIRM               | Confirmed by both reviewers against the live files. No change: this is the desired state.                                                                                                                                                                                                                    |
+| `GOVERNANCE.md`, named CODEOWNER areas, `SUPPORT.md`, branch protection                             | L2       | CONFIRM / OUTSTANDING | Still correctly deferred and correctly scoped to a later project state (no maintainer team exists; branch protection is a GitHub setting no file here can assert). Left as-is deliberately.                                                                                                                  |
+| Placeholder guards should be tidied up now the tool is confirmed public                             | —        | REJECT                | Explicitly refused. The owner decision raises the _urgency_ of filling these in; it does not authorise inventing an email, a name, or a response time. L3 found 30 placeholders all correctly guarded — that is the target state, and every guard was left intact.                                           |
+
+**Files outside this document that still carry the withdrawn `rustix`/FFI-shim unsafe
+rationale** (a separate propagation pass owns these; not edited here): `CONTRIBUTING.md`,
+`SECURITY.md`, `crates/detoxrs/src/main.rs`,
+`docs/research/00-proposal-rust-detox-successor.md`.
