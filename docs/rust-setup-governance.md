@@ -176,10 +176,12 @@ not-yet-wired-up rather than described as active.
   pass and now documents `just dep-budget`, `audit`, `deny`, `vet`, `geiger`,
   `trivy`, `sbom` and `ci` in its recipe table. Re-verified this pass: every one
   of those recipes exists (`just --list`), so the table is accurate and the
-  "those recipes don't exist" note above is obsolete. One stale detail remains
-  and is **not** this document's to fix: `CONTRIBUTING.md`'s table renders
-  `just geiger` as `cargo geiger -p detoxrs`, but `-p` does not work against a
-  virtual manifest — the recipe actually uses an absolute `--manifest-path`.
+  "those recipes don't exist" note above is obsolete. One stale detail was
+  flagged here as not this document's to fix — `CONTRIBUTING.md`'s table
+  rendering `just geiger` as `cargo geiger -p detoxrs`, which does not work
+  against a virtual manifest — and it was **discharged on 2026-07-31** by the
+  propagation pass: the table now shows the absolute `--manifest-path` form the
+  recipe actually uses.
 - `just fmt-file` / `just fmt-check-file` run on every markdown file created
   (`SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
   `.github/PULL_REQUEST_TEMPLATE.md`) — passes after one `fmt-file` pass

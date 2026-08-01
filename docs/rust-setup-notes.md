@@ -16,8 +16,8 @@ Foundation-only pass: workspace scaffolding, no application logic. Written again
   rustup) — passes.
 - **Toolchain file pins 1.96.1** (the latest verified-working stable, matching the
   environment), separate from the MSRV. `rust-toolchain.toml` documents this split.
-- **Unsafe-code policy: `forbid` in `detoxrs-core`, `deny` in `detoxrs` — and the
-  original justification for that asymmetry is withdrawn (corrected 2026-07-31).**
+- **Unsafe-code policy: `forbid` in both crates (asymmetry removed 2026-07-31;
+  the original justification for it is withdrawn).**
   The core crate is pure by design and has no future need for `unsafe`. The binary
   crate was set to `deny` rather than `forbid` on the premise that it would
   eventually need a hand-written macOS `libc` FFI shim for `renamex_np` (proposal
@@ -34,16 +34,16 @@ Foundation-only pass: workspace scaffolding, no application logic. Written again
   - The stated reason for choosing `deny` over `forbid` in `crates/detoxrs` **does
     not hold**. No `renamex_np` FFI shim is needed; `rustix` covers it from safe
     code, so both crates could carry `#![forbid(unsafe_code)]` today.
-  - The only remaining shim candidate is the `getattrlist` /
-    `VOL_CAP_INT_RENAME_EXCL` capability probe, which `rustix` does not wrap. That
-    is a separate, narrower question and is not by itself a decided reason to keep
-    `deny`; if it is the reason, it must be stated as such rather than resting on
-    the withdrawn `renamex_np` claim.
-  - `crates/detoxrs/src/main.rs` still declares `#![deny(unsafe_code)]` and still
-    carries the withdrawn rationale in its doc comment. Changing the attribute and
-    the comment is a code change outside this note's scope; it is tracked in the
-    stage-3 review record below along with the other files that repeat the same
-    stale claim (`CONTRIBUTING.md`, `SECURITY.md`, the proposal).
+  - The only remaining shim candidate was the `getattrlist` /
+    `VOL_CAP_INT_RENAME_EXCL` capability probe, which `rustix` does not wrap. The
+    propagation pass dropped that probe too: an unsupported flag is detected from
+    the error `renameat_with` returns, which is already the design's Linux
+    demotion path, so the probe bought a dependency and an `unsafe` block to learn
+    at open time what the rename call reports anyway (proposal §5.4).
+  - **Applied 2026-07-31 (propagation pass):** `crates/detoxrs/src/main.rs` now
+    declares `#![forbid(unsafe_code)]` with the withdrawn rationale replaced;
+    `CONTRIBUTING.md`, `SECURITY.md`, and the proposal were corrected in the same
+    sweep.
 - **Lints: `[workspace.lints.clippy] all/pedantic/nursery = "warn"`**, inherited by both
   crates via `[lints] workspace = true`; CI-equivalent enforcement is `-D warnings` on
   the command line (`just clippy`), not baked into the lint table, so local `cargo

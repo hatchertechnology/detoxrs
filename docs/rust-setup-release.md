@@ -69,8 +69,11 @@ implemented below, per this task's brief, and it works for the "is this
 release accountable and versioned correctly" question today with zero new
 external tooling risk. But proposal 9.4 is the more specific, more
 load-bearing source for this project -- it was written with this project's
-actual packaging destinations in mind (Homebrew tap before detox's
-2027-07-28 Homebrew disable date, Nix, AUR, Debian/Fedora once the dependency
+actual packaging destinations in mind (Homebrew tap, since detox's formula is
+already deprecated — `deprecation_date: 2026-07-28`, `disable_date: null`;
+an earlier version of this line said "before detox's 2027-07-28 Homebrew
+disable date", which is `brew info`'s projection rather than a published date,
+corrected 2026-07-31 — then Nix, AUR, Debian/Fedora once the dependency
 budget allows). **I recommend the human decide to switch to
 `release-plz` + `cargo-dist` before the v1.0 packaging milestone**
 (proposal roadmap section 10, "packaging items 1-4 from 9.4"), and keep

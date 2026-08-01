@@ -135,10 +135,12 @@ consult those sections for the full design rationale.
 **Explicitly out of scope for this policy** (report as an ordinary issue
 instead, since these are not confidential):
 
-- Vulnerabilities in third-party dependencies — tracked separately once
-  `cargo audit`/`cargo deny` are wired into CI (not yet done; see
-  `docs/rust-setup-notes.md`). If you spot one we have missed in the
-  meantime, an ordinary issue is fine.
+- Vulnerabilities in third-party dependencies — tracked separately by the
+  dependency scanning that is already wired into CI: `cargo audit` and
+  `cargo deny check` (policy in `deny.toml`) plus `trivy` and `cargo geiger`
+  run in `.github/workflows/security.yml`, `cargo vet` against the audit set in
+  `supply-chain/`. If you spot one those have missed, an ordinary issue is
+  fine.
 - Behavior that is merely surprising or a UX papercut without a
   data-loss/escape/injection consequence — file those as regular bugs.
 - Denial of service against your own machine by pointing `detoxrs` at an
@@ -150,10 +152,12 @@ instead, since these are not confidential):
   design; it runs as the invoking user and touches only what that user can
   already rename).
 
-`detoxrs` has `unsafe_code = "forbid"` in the core crate and `"deny"` in the
-binary crate today (no `unsafe` code exists in the codebase yet). A future
-macOS FFI shim (planned, not yet written — see `docs/rust-setup-notes.md`) will
-need a narrow, reviewed `#[allow(unsafe_code)]` exception; when that lands,
-its safety argument and the syscalls it wraps become part of this project's
-security-relevant surface and should be named explicitly in review, per
-`secure-development.md`'s FFI policy guidance.
+`detoxrs` has `unsafe_code = "forbid"` in **both** crates, and no `unsafe` code
+exists in the codebase. No FFI shim is planned: the no-clobber rename syscalls
+this tool needs (`renameat2` on Linux, `renameatx_np` on macOS) are reachable
+from safe code through `rustix::fs::renameat_with` (proposal §5.4, §7.2;
+correction recorded in `docs/rust-setup-notes.md`). Introducing `unsafe` would
+therefore mean deliberately relaxing a `forbid` attribute, which is a
+reviewable change in its own right — and if it ever happens, the safety
+argument and the syscalls wrapped become part of this project's
+security-relevant surface, per `secure-development.md`'s FFI policy guidance.

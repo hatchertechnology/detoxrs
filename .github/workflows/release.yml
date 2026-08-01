@@ -127,7 +127,7 @@ jobs:
             cross: false
             archive_ext: zip
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2 (pinned via v4 tag, resolved 2026-07-31)
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (pinned via v4 tag, resolved 2026-07-31)
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
 
@@ -209,7 +209,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2 (pinned via v4 tag, resolved 2026-07-31)
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (pinned via v4 tag, resolved 2026-07-31)
 
       - name: Download all built archives
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0 (pinned via v4 tag, resolved 2026-07-31)

@@ -200,11 +200,15 @@ Functions  Expressions  Impls  Traits  Methods  Dependency
 ```
 
 Real and informative even with zero dependencies: `detoxrs-core` gets the
-`:)` symbol (declares `#![forbid(unsafe_code)]`), `detoxrs` gets `?` (no
-`unsafe` found, but geiger doesn't recognize `#![deny(unsafe_code)]` as the
-same guarantee as `forbid` — it only special-cases `forbid`). That's a
-correct, if minor, distinction: `deny` is a _default_ that a later
-`#[allow(unsafe_code)]` can override in a specific block.
+`:)` symbol (declares `#![forbid(unsafe_code)]`). `detoxrs` used to get `?`,
+because it declared `#![deny(unsafe_code)]` and geiger only special-cases
+`forbid` — a correct, if minor, distinction, since `deny` is a _default_ that a
+later `#[allow(unsafe_code)]` can override in a specific block. **As of
+2026-07-31 the binary crate declares `#![forbid(unsafe_code)]` too** (the
+`renamex_np` FFI shim the `deny` was reserving room for turned out to be
+unnecessary — `rustix` wraps it from safe code; see `docs/rust-setup-notes.md`),
+so both crates should now report `:)`. Re-run `just geiger` to confirm the
+symbol changed.
 
 **Correction (stage 3, 2026-07-31):** this section previously went on to say
 the binary crate uses `deny` because it "plans a scoped, reviewed `unsafe` FFI

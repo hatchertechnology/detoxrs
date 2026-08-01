@@ -48,25 +48,25 @@ These are the recipes that exist today. `just gate` is the fast local gate;
 `just ci` is the wider one that also runs the supply-chain tooling (and needs
 those tools installed).
 
-| Recipe                        | Command                                             | What it protects                                                |
-| ----------------------------- | --------------------------------------------------- | --------------------------------------------------------------- |
-| `just build`                  | `cargo build` (workspace)                           | The workspace compiles                                          |
-| `just fmt`                    | `cargo fmt` + `prettier` on Markdown                | Formatting, fixed in place                                      |
-| `just fmt-check`              | Check-only form of `fmt`                            | Formatting, unmodified (CI-equivalent)                          |
-| `just fmt-file <files>`       | Format only the given files                         | Formatting a specific file without touching others mid-edit     |
-| `just fmt-check-file <files>` | Check-only form of `fmt-file`                       | Same, without writing                                           |
-| `just clippy`                 | `cargo clippy --all-targets -- -D warnings`         | Lints — `all`/`pedantic`/`nursery`, warnings promoted to errors |
-| `just test`                   | `cargo test` (workspace)                            | The test suite                                                  |
-| `just msrv`                   | Builds against the pinned MSRV toolchain            | MSRV drift from dependency or code changes                      |
-| `just dep-budget`             | Counts direct dependencies against a cap            | The <= 11 direct-dependency budget (proposal §7.2)              |
-| `just audit`                  | `cargo audit`                                       | Known advisories in the dependency tree                         |
-| `just deny`                   | `cargo deny check`                                  | License, advisory, ban and source policy (`deny.toml`)          |
-| `just vet`                    | `cargo vet check`                                   | Dependency review status                                        |
-| `just geiger`                 | `cargo geiger -p detoxrs`                           | `unsafe` usage in the dependency tree (informational)           |
-| `just trivy`                  | `trivy fs`                                          | Vulnerability/secret/misconfig scan                             |
-| `just sbom`                   | `cargo cyclonedx`                                   | CycloneDX SBOM generation                                       |
-| `just gate`                   | `fmt-check`, `clippy`, `test`, `msrv`, `dep-budget` | The fast local gate — run this before opening a PR              |
-| `just ci`                     | `gate` + `audit`, `deny`, `vet`, `geiger`, `trivy`  | Everything, including supply chain                              |
+| Recipe                        | Command                                                        | What it protects                                                |
+| ----------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------- |
+| `just build`                  | `cargo build` (workspace)                                      | The workspace compiles                                          |
+| `just fmt`                    | `cargo fmt` + `prettier` on Markdown                           | Formatting, fixed in place                                      |
+| `just fmt-check`              | Check-only form of `fmt`                                       | Formatting, unmodified (CI-equivalent)                          |
+| `just fmt-file <files>`       | Format only the given files                                    | Formatting a specific file without touching others mid-edit     |
+| `just fmt-check-file <files>` | Check-only form of `fmt-file`                                  | Same, without writing                                           |
+| `just clippy`                 | `cargo clippy --all-targets -- -D warnings`                    | Lints — `all`/`pedantic`/`nursery`, warnings promoted to errors |
+| `just test`                   | `cargo test` (workspace)                                       | The test suite                                                  |
+| `just msrv`                   | Builds against the pinned MSRV toolchain                       | MSRV drift from dependency or code changes                      |
+| `just dep-budget`             | Counts direct dependencies against a cap                       | The <= 11 direct-dependency budget (proposal §7.2)              |
+| `just audit`                  | `cargo audit`                                                  | Known advisories in the dependency tree                         |
+| `just deny`                   | `cargo deny check`                                             | License, advisory, ban and source policy (`deny.toml`)          |
+| `just vet`                    | `cargo vet check`                                              | Dependency review status                                        |
+| `just geiger`                 | `cargo geiger --manifest-path <abs>/crates/detoxrs/Cargo.toml` | `unsafe` usage in the dependency tree (informational)           |
+| `just trivy`                  | `trivy fs`                                                     | Vulnerability/secret/misconfig scan                             |
+| `just sbom`                   | `cargo cyclonedx`                                              | CycloneDX SBOM generation                                       |
+| `just gate`                   | `fmt-check`, `clippy`, `test`, `msrv`, `dep-budget`            | The fast local gate — run this before opening a PR              |
+| `just ci`                     | `gate` + `audit`, `deny`, `vet`, `geiger`, `trivy`             | Everything, including supply chain                              |
 
 `prettier` checks Markdown, YAML and JSON; `cargo fmt` checks Rust. TOML is
 deliberately unchecked (see the comment in the `justfile`). See `AGENTS.md` for
@@ -96,12 +96,14 @@ updating both `Cargo.toml` and `docs/rust-setup-notes.md`'s derivation. Run
 
 ## Code standards
 
-- **`unsafe` is forbidden in `detoxrs-core`** (`#![forbid(unsafe_code)]`) and
-  **denied in `detoxrs`** (`#![deny(unsafe_code)]`, overridable only with an
-  explicit, reviewed `#[allow(unsafe_code)]` naming the syscall and the
-  safety argument — see `crates/detoxrs/src/main.rs`). A PR introducing
-  `unsafe` needs that comment and should expect close review; this is
-  reserved for a planned macOS FFI shim that does not exist yet.
+- **`unsafe` is forbidden in both crates** (`#![forbid(unsafe_code)]` in
+  `detoxrs-core` and in `detoxrs`). There is no planned FFI shim to leave room
+  for: `rustix::fs::renameat_with` with `RenameFlags::NOREPLACE` wraps
+  `renameat2` on Linux and `renameatx_np` on macOS from safe code, which is why
+  the binary crate was moved from `deny` to `forbid` (proposal §5.4, §7.2). A
+  PR that needs `unsafe` needs to change that attribute deliberately, in its
+  own commit, with the syscall and the safety argument named — `forbid` cannot
+  be downgraded by an `#[allow(unsafe_code)]`, and that is the point.
 - **Clippy is not advisory.** `pedantic` and `nursery` are on
   workspace-wide, and `just clippy` treats warnings as errors. If a lint is
   genuinely wrong for a piece of code, `#[allow(...)]` it with a comment
