@@ -10,6 +10,8 @@
 //! the JSON output as well — a JSON string is not a safe place to put a raw
 //! control byte either.
 
+use crate::apply::{ItemResult, Summary};
+use crate::fsops;
 use detoxrs_core::pipeline::Unrepresentable;
 use detoxrs_core::plan::{Conflict, EntryKind, Plan, PlanItem, Resolution, SkipReason};
 use serde_json::json;
@@ -65,12 +67,54 @@ pub fn preview(w: &mut impl Write, plan: &Plan, show_unchanged: bool) -> io::Res
         "\n{} to rename, {} unchanged, {} skipped, {} conflicts.",
         t.rename, t.unchanged, t.skipped, t.conflicts
     )?;
-    // Not "re-run with -x to apply": in this build -x is refused, and a footer
-    // that suggests a command which exits non-zero is a footer that lies.
+    writeln!(w, "Nothing was changed. Re-run with -x to apply.")?;
+    not_utf8_hint(w, t)
+}
+
+/// The closing report of an `-x` run.
+///
+/// The batch id goes in the output rather than only in the journal filename: a
+/// user who has just renamed 400 files needs the one string that undoes it, and
+/// making them go and look for it is how `undo` ends up unused.
+///
+/// # Errors
+///
+/// Propagates any write error from `w`.
+pub fn applied(
+    w: &mut impl Write,
+    plan: &Plan,
+    s: &Summary,
+    batch: &str,
+    journal_path: &str,
+) -> io::Result<()> {
+    let t = Tally::of(&plan.items);
+    // Items the plan never intended to rename are reported the same way the
+    // preview reports them, because "why was this left alone" is the same
+    // question after the fact as before it.
+    let untouched: Vec<PlanItem> = plan
+        .items
+        .iter()
+        .filter(|i| !matches!(i.resolution, Resolution::Rename | Resolution::Unchanged))
+        .cloned()
+        .collect();
+    items(w, &untouched, false)?;
+
     writeln!(
         w,
-        "Nothing was changed. This build previews only; applying is not implemented yet."
+        // Same field order as the preview's summary, with `failed` appended, so
+        // the two lines read the same way (§2.2).
+        "\n{} renamed, {} unchanged, {} skipped, {} conflicts, {} failed.",
+        s.renamed, t.unchanged, t.skipped, t.conflicts, s.failed
     )?;
+    if let Some(why) = &s.aborted {
+        writeln!(w, "The batch stopped early: {why}")?;
+    }
+    writeln!(w, "Undo with: detoxrs undo {batch}")?;
+    writeln!(w, "Journal: {journal_path}")?;
+    not_utf8_hint(w, t)
+}
+
+fn not_utf8_hint(w: &mut impl Write, t: Tally) -> io::Result<()> {
     if t.not_utf8 > 0 {
         writeln!(
             w,
@@ -191,16 +235,31 @@ const fn conflict_note(c: Conflict) -> &'static str {
 
 /// The machine-readable form. Data on stdout; nothing else goes there.
 ///
+/// `outcomes` is `None` for a preview and `Some` after an `-x` run, one entry per
+/// plan item in the same order. The `applied` field is derived from which it is,
+/// so a consumer can never read a preview as a completed run.
+///
 /// # Errors
 ///
 /// Propagates any write error from `w`.
-pub fn json(w: &mut impl Write, plan: &Plan) -> io::Result<()> {
+pub fn json(w: &mut impl Write, plan: &Plan, outcomes: Option<&[ItemResult]>) -> io::Result<()> {
     let t = Tally::of(&plan.items);
     let items: Vec<_> = plan
         .items
         .iter()
-        .map(|i| {
+        .enumerate()
+        .map(|(n, i)| {
+            let outcome = outcomes.and_then(|o| o.get(n));
             json!({
+                "result": outcome.map(|o| match o {
+                    ItemResult::Renamed => "renamed",
+                    ItemResult::NotAttempted => "not_attempted",
+                    ItemResult::Failed(_) => "failed",
+                }),
+                "error": match outcome {
+                    Some(ItemResult::Failed(why)) => Some(why.as_str()),
+                    _ => None,
+                },
                 "dir": escape(i.dir.as_os_str()),
                 "from": escape(&i.from),
                 "to": escape(&i.to),
@@ -233,14 +292,21 @@ pub fn json(w: &mut impl Write, plan: &Plan) -> io::Result<()> {
 
     let doc = json!({
         "schema": 1,
-        // Always false in this build, and it is a field rather than an omission
-        // so a consumer can assert on it once applying exists.
-        "applied": false,
+        "applied": outcomes.is_some(),
+        // Which guarantee this run actually had (§5.4): the atomic no-clobber
+        // rename, or the demoted check-then-rename with its documented window.
+        // Reported rather than assumed, because a consumer auditing a batch needs
+        // to know which one it got.
+        "atomicity": fsops::atomicity(),
         "summary": {
             "to_rename": t.rename,
             "unchanged": t.unchanged,
             "skipped": t.skipped,
             "conflicts": t.conflicts,
+            "renamed": outcomes.map(|o| o.iter().filter(|r| **r == ItemResult::Renamed).count()),
+            "failed": outcomes.map(|o| {
+                o.iter().filter(|r| matches!(r, ItemResult::Failed(_))).count()
+            }),
         },
         "items": items,
     });

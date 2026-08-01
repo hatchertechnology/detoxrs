@@ -13,11 +13,10 @@
 //!   detox differs: its `-r` gates descent only *past* the first level, so a
 //!   named directory's immediate children are processed either way. That quirk
 //!   is deliberately not copied — a flag whose scope is one level deeper than it
-//!   reads produces a preview the user will misjudge. (Note for the reader: the
-//!   proposal's own §2.2 example shows `detoxrs ~/Downloads` listing the
-//!   directory's contents, which contradicts §5.6, §2.4's `--help` block and
-//!   §9.2's migration note. Three-to-one, and the three carry the reasoning, so
-//!   §5.6 wins.)
+//!   reads produces a preview the user will misjudge. **Settled by owner ruling on
+//!   2026-08-01** (`docs/owner-decisions.md`), which closed the contradiction
+//!   between §5.6/§2.4/§9.2 and §2.2's worked example in favour of the three
+//!   sections; §2.2 now carries a warning block rather than a rewritten example.
 //! * **A symlinked directory is never descended, and there is no flag for it.**
 //!   `follow_links(false)` is that guarantee; the link's own name is still
 //!   cleaned, as any other directory entry would be.

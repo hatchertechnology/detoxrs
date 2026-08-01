@@ -35,8 +35,22 @@ fn short_help_lists_every_flag() {
         "--json",
         "--help",
         "--version",
+        // Not a flag, but the same contract: the way back out of an -x run has to
+        // be visible from `-h`, or it may as well not exist.
+        "undo",
     ] {
         assert!(text.contains(flag), "-h omits {flag}:\n{text}");
+    }
+}
+
+/// `undo` has its own help, and it must name both ways of choosing a batch.
+#[test]
+fn undo_help_names_last_and_list() {
+    let out = detoxrs().args(["undo", "--help"]).output().expect("runs");
+    assert!(out.status.success());
+    let text = String::from_utf8(out.stdout).expect("help is UTF-8");
+    for flag in ["--last", "--list", "BATCH-ID"] {
+        assert!(text.contains(flag), "undo --help omits {flag}:\n{text}");
     }
 }
 

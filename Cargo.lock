@@ -176,6 +176,7 @@ dependencies = [
  "clap",
  "detoxrs-core",
  "insta",
+ "rustix",
  "serde_json",
  "tempfile",
  "walkdir",

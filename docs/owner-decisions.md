@@ -7,6 +7,29 @@ changes, so a later reader can tell an owner's call from an agent's inference.
 
 ---
 
+## 2026-08-01 — `-r` semantics: one argument, one name
+
+**Without `-r`, a directory argument has only its own basename cleaned and
+nothing inside it is touched.** With `-r`, the whole subtree. There is no third
+middle behaviour.
+
+This resolves a contradiction inside the proposal, raised at the end of the WP5a
+session. §5.6, §2.4's `--help` block and §9.2's migration note all state the rule
+above; §2.2's worked example instead shows `detoxrs ~/Downloads` listing that
+directory's contents, which is upstream `detox`'s behaviour (its `-r` gates
+descent only _past_ the first level). Three sections against one example, and the
+three carry the reasoning.
+
+**Decision: the three sections win.** `walk.rs` already implemented it that way
+and recorded the discrepancy rather than resolving it silently; §2.2 now carries a
+flagged warning block pointing at this entry, and the example is left visible
+rather than rewritten, because it is the passage a reader is most likely to copy.
+
+This is the single most visible behavioural difference from the tool being
+replaced, so §9.2's migration note is the place it has to stay loud.
+
+---
+
 ## 2026-07-31 — License: dual MIT OR Apache-2.0
 
 Relicensed from BSD-3-Clause. Done while the project had a single copyright

@@ -5,12 +5,11 @@
 //! that implement them, because a flag that parses and does nothing is worse
 //! documentation than a flag that is absent.
 //!
-//! `-x` is the exception. It parses here even though this build has no write
-//! path, so the CLI surface is complete and stable from the first release; the
-//! refusal lives in `main::run`, which is also the only place that would ever
-//! call an apply path.
+//! `--no-journal` is the one flag §5.5 describes that is absent here on purpose:
+//! it exists to trade `undo` away for speed on huge trees, and until someone has
+//! measured the journal costing them something there is nothing to trade.
 
-use clap::{Parser, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use detoxrs_core::plan::OnCollision;
 use std::path::PathBuf;
 
@@ -20,12 +19,19 @@ use std::path::PathBuf;
     name = "detoxrs",
     version,
     about = "Make filenames sane: unix-safe, portable, readable. Preview by default.",
-    after_help = "Nothing is renamed unless you pass -x. This build previews only: -x is \
-                  parsed but refused, because no write path exists in it yet.\n\n\
+    // Both are needed for `detoxrs undo` to coexist with a required positional:
+    // one stops clap demanding PATH when a subcommand is used, the other stops it
+    // accepting flags meant for a forward run alongside it.
+    args_conflicts_with_subcommands = true,
+    subcommand_negates_reqs = true,
+    after_help = "Nothing is renamed unless you pass -x. Every -x run writes an undo journal \
+                  to $XDG_STATE_HOME/detoxrs/journal; `detoxrs undo --last` reverts the most \
+                  recent one.\n\n\
                   Without -r, a directory argument has only its own name cleaned and nothing \
                   inside it is touched (detox differs).\n\n\
                   Exit codes:\n  \
-                  0  preview produced with no errors\n  \
+                  0  no errors\n  \
+                  1  one or more items could not be renamed\n  \
                   2  usage, walk, or plan error"
 )]
 #[expect(
@@ -39,7 +45,7 @@ pub struct Cli {
     #[arg(required = true, value_name = "PATH")]
     pub paths: Vec<PathBuf>,
 
-    /// Perform the renames (not implemented in this build)
+    /// Perform the renames, recording an undo journal
     #[arg(short = 'x', long)]
     pub exec: bool,
 
@@ -66,6 +72,32 @@ pub struct Cli {
     /// JSON on stdout, diagnostics on stderr
     #[arg(long)]
     pub json: bool,
+
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+/// Everything that is not a forward run.
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Put a recorded batch of renames back
+    Undo(Undo),
+}
+
+/// `detoxrs undo` (proposal §5.5).
+#[derive(Debug, Args)]
+pub struct Undo {
+    /// The batch to revert, as printed by --list
+    #[arg(value_name = "BATCH-ID")]
+    pub batch_id: Option<String>,
+
+    /// Revert the most recent batch
+    #[arg(long, conflicts_with = "batch_id")]
+    pub last: bool,
+
+    /// Show the recorded batches and exit
+    #[arg(long, conflicts_with_all = ["last", "batch_id"])]
+    pub list: bool,
 }
 
 /// `--on-collision`, as spelled on the command line.

@@ -224,22 +224,14 @@ fn undecodable_names_are_escaped_never_raw() {
     assert!(text.contains("not valid UTF-8"), "{text}");
 }
 
-/// `-x` parses, so the CLI surface is complete, but this build has no write
-/// path at all. It must say so loudly rather than succeed silently.
+/// The dry-run default (§2.1), asserted rather than assumed: **no invocation
+/// without `-x` changes a filesystem.** `WP5a` could prove this by construction,
+/// because no write code existed; from `WP5b` on it is a property of one branch in
+/// `main::run`, which makes it worth a test rather than a paragraph. `-x` is
+/// deliberately absent from this list — it is the one thing that is supposed to
+/// write, and it has its own file.
 #[test]
-fn exec_is_refused_not_silently_ignored() {
-    let t = fixture();
-    let out = detoxrs(t.path()).args(["-x", "."]).output().expect("runs");
-    assert_ne!(out.status.code(), Some(0), "-x must not report success");
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("not implemented"), "stderr was: {err}");
-    assert!(out.stdout.is_empty(), "-x must not print a preview");
-}
-
-/// `WP5a`'s defining property: no invocation of this binary can change a
-/// filesystem, because no code that writes one has been written yet.
-#[test]
-fn binary_never_writes_anything() {
+fn preview_never_writes_anything() {
     let t = fixture();
     let before = census(t.path());
 
@@ -249,9 +241,9 @@ fn binary_never_writes_anything() {
         vec!["-r", "-v", "."],
         vec!["-r", "--json", "."],
         vec!["-q", "-r", "."],
+        vec!["-n", "-r", "."],
         vec!["-r", "--on-collision", "skip", "."],
         vec!["-r", "--on-collision", "fail", "."],
-        vec!["-x", "-r", "."],
         vec!["Screen Shot.png"],
         vec!["nested dir"],
     ] {

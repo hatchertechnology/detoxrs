@@ -14,4 +14,4 @@ expression: "stdout_of(detoxrs(t.path()).args([\"-r\", \"-v\", \".\"]))"
   nested dir/        ->  nested_dir/
 
 6 to rename, 2 unchanged, 0 skipped, 0 conflicts.
-Nothing was changed. This build previews only; applying is not implemented yet.
+Nothing was changed. Re-run with -x to apply.

@@ -1,4 +1,4 @@
-# Handoff — state as of 2026-08-01
+# Handoff — state as of 2026-08-01 (WP5b complete)
 
 Written at the end of a long orchestration session, so a fresh session can resume without
 re-deriving anything. Read `docs/plans/unified-draft-plan.md` first; it is the spec being
@@ -6,76 +6,85 @@ implemented. `docs/owner-decisions.md` overrides everything.
 
 ## Where the work stands
 
-| Stage                                                     | Status                            |
-| --------------------------------------------------------- | --------------------------------- |
-| Research: detox inputs, options, config, filters, env     | done, validated, stage-3 reviewed |
-| Research: online user feedback + compiled synthesis       | done, stage-3 reviewed            |
-| Rust project setup per the ideal-project-setup guide      | done                              |
-| Stage-3 review sweep of all 22 files under `docs/`        | done (3 reviewers + arbiter each) |
-| Cross-document propagation into the proposal and code     | done                              |
-| Three implementation plans + opus unified draft + my pass | done                              |
-| 20 plan-required proposal amendments                      | applied                           |
-| **M1 WP1-3** pure transform core                          | **done, gate green**              |
-| **M1 WP4** collision engine                               | **done, gate green**              |
-| **M1 WP5a** preview-only binary                           | **done, gate green, tool runs**   |
-| **M1 WP5b** write path: fsops, apply, journal, undo       | **NOT STARTED — resume here**     |
-| Implementation review (separate team)                     | not started                       |
-| Opus adjudication of that review                          | not started                       |
+| Stage                                                     | Status                                 |
+| --------------------------------------------------------- | -------------------------------------- |
+| Research: detox inputs, options, config, filters, env     | done, validated, stage-3 reviewed      |
+| Research: online user feedback + compiled synthesis       | done, stage-3 reviewed                 |
+| Rust project setup per the ideal-project-setup guide      | done                                   |
+| Stage-3 review sweep of all 22 files under `docs/`        | done (3 reviewers + arbiter each)      |
+| Cross-document propagation into the proposal and code     | done                                   |
+| Three implementation plans + opus unified draft + my pass | done                                   |
+| 20 plan-required proposal amendments                      | applied                                |
+| **M1 WP1-3** pure transform core                          | **done, gate green**                   |
+| **M1 WP4** collision engine                               | **done, gate green**                   |
+| **M1 WP5a** preview-only binary                           | **done, gate green, tool runs**        |
+| **M1 WP5b** write path: fsops, apply, journal, undo       | **done, gate green, `kill -9` passes** |
+| Implementation review (separate team)                     | **not started — resume here**          |
+| Opus adjudication of that review                          | not started                            |
 
 `just gate` is green: fmt, clippy pedantic+nursery at `-D warnings`, tests, MSRV 1.93.0,
-`dep-budget` 5/11. Both crates are `#![forbid(unsafe_code)]`.
+`dep-budget` 6/11 (`rustix` joined at WP5b, as planned). Both crates are
+`#![forbid(unsafe_code)]`.
 
-The tool is usable today for previewing:
+M1 is functionally complete:
 
 ```
-$ cargo run -q -p detoxrs -- -r /some/tree
+$ cargo run -q -p detoxrs -- -r /some/tree        # preview
+$ cargo run -q -p detoxrs -- -x -r /some/tree     # apply, journalled
+$ cargo run -q -p detoxrs -- undo --last          # put it back
 ```
 
-It **cannot write** — that is asserted by `binary_never_writes_anything`, which compares a
-recursive census of entries, symlink-ness, sizes and mtimes across ten invocations including `-x`.
+Preview still cannot write, and that is asserted rather than assumed:
+`preview_never_writes_anything` compares a recursive census across ten non-`-x` invocations. The
+`-x` path is `tests/apply.rs`, which owns the two rows that gate M1.
 
-## Resume here: WP5b
+## What WP5b actually shipped
 
-Scope, per plan §7.1: `crates/detoxrs/src/{fsops,fsops/fallback,apply,journal}.rs` plus the `undo`
-subcommand, and switching `-x` from refusal to execution.
+`crates/detoxrs/src/{fsops.rs,fsops/fallback.rs,apply.rs,journal.rs}`, the `undo` subcommand,
+`-x` switched from refusal to execution, and exit code 1 made real. Every non-negotiable from the
+previous handoff held; two things came out differently and both are recorded in module docs:
 
-Non-negotiables, all established by evidence rather than preference:
+- **`RenameFlags::NOREPLACE` via `rustix` worked exactly as measured.** One safe call, no `#[cfg]`
+  split inside `fsops::unix`, no FFI. `rustix` is a `cfg(unix)` target dependency so the Windows
+  best-effort tier still compiles, reaching a rename through `fallback::check_then_rename` and
+  reporting `"atomicity": "check-then-rename"` rather than claiming atomicity it does not have.
+- **No `policy_digest` in the journal header.** There is no hash function in the dependency budget
+  and a digest nobody can recompute documents nothing, so the policy's fields are written verbatim.
+- **A non-UTF-8 _directory_ path is journalled as `dir_bytes`.** Names cannot need this (an
+  undecodable name is `Skipped`), but the directory holding them can be undecodable on Linux, and a
+  journal that records an approximation of a path cannot undo.
 
-- **`rustix::fs::renameat_with` + `RenameFlags::NOREPLACE`** is the only rename entry point, on
-  both Linux and macOS. No `unsafe`, no FFI shim, no `libc`. Verified twice by compiling and
-  running a `forbid(unsafe_code)` program on APFS: `EEXIST` on an occupied destination, `Ok` on a
-  free one, and `Ok` on a same-inode case-only respell.
-- **There is no `rename_case_only` path.** It was deleted once measurement falsified its only
-  stated reason (see the proposal's §5.4 and doc 06 row 4f).
-- Journal protocol: write `intent`, fsync, rename, write `done` or `failed`. Append-only JSONL in
-  `$XDG_STATE_HOME/detoxrs/journal/`.
-- **Exit criterion that gates M1: a `kill -9` mid-batch test**, not `SIGTERM`. Journal replay must
-  identify the exact interrupted item and `undo` must restore the completed prefix. This is risk 1
-  in the plan and the one property the whole design is staked on.
-- The new **TOCTOU collision during apply** matrix row (plan §5.3): create a file at a planned
-  destination after the snapshot and before apply; assert a fresh conflict, the pre-existing file
-  byte-identical, no panic, exit 1.
-- Exit code 1 becomes real here (per-item failures). Until now only 0 and 2 exist.
-- v1.0 ships **no signal handler** — decided, with reasons, in the proposal's §5.8.
+**One real bug was found by a test, not by review, which keeps the streak intact (seven now).**
+`undo --last` originally mixed the pid into the batch id suffix, so two batches created in the same
+second sorted by a hash rather than by time — and undoing an undo reverted the _original_ batch.
+Caught by `an_undo_can_itself_be_undone`. The suffix is now the subsecond clock scaled to four
+fixed-width hex digits, which is monotonic within a second and sorts lexicographically the way it
+compares numerically. **If you change the journal filename format, that ordering property is what
+you must preserve;** `list()` sorting by name is what `--last` means.
 
-## Open question needing an owner ruling
+The `kill -9` test (`crash_mid_batch_is_recoverable`) watches the journal rather than the clock:
+it spawns a 1000-item batch, kills the child as soon as five `done` records exist, and then asserts
+off the on-disk journal that at most one item has an `intent` with no outcome, that `undo --last`
+restores every completed rename, and that the tree neither gained nor lost an entry. It asserts it
+was _actually_ interrupted rather than passing vacuously if the machine is fast.
 
-**`-r` semantics, and a contradiction inside the proposal.** WP5a chose: without `-r`, a directory
-argument has only its own basename cleaned; nothing inside it is touched. Upstream `detox` instead
-always processes a named directory's immediate children, and `-r` only controls deeper descent.
+## Resume here: implementation review
 
-The proposal states WP5a's choice in §5.6, §2.4's `--help` block and §9.2 — but §2.2's worked
-example shows `detoxrs ~/Downloads` listing that directory's contents, which implies upstream's
-behavior. Three sections against one example. WP5a followed the three and recorded the discrepancy
-in `walk.rs`'s module docs rather than resolving it silently.
+M1's code is done; nobody outside the session that wrote it has read it. The review pass and the
+opus adjudication of that review are the two remaining rows in the table above.
 
-This needs a decision, because it is the single most visible behavioral difference from the tool
-being replaced, and because §2.2 is the part of the proposal a reader is most likely to copy.
+## Closed: `-r` semantics
+
+Ruled by the owner on 2026-08-01 and recorded in `docs/owner-decisions.md`: §5.6, §2.4 and §9.2
+win, §2.2's worked example is the wrong one. §2.2 now carries a warning block pointing at the
+decision; the example is deliberately left visible rather than rewritten, because it is the passage
+a reader is most likely to copy.
 
 ## Process notes worth keeping
 
 - **Every design defect so far was found by a property test or by running something, never by
-  review of prose.** Six so far: the stage-13 empty-name fallback, the undecidable length bound,
+  review of prose.** Seven now, the newest being WP5b's `undo --last` ordering bug above. Six
+  before it: the stage-13 empty-name fallback, the undecidable length bound,
   the stage-independence seam, the untested apply-time TOCTOU, the stage-13 NFC re-run set, and the
   collision tie-break that was keyed on the colliding key. Keep the rule that a property which
   cannot pass is reported, never weakened.

@@ -35,6 +35,12 @@ walkdir = "2"
 # `--json`, and later the journal. Hand-escaping path-derived data into JSON is
 # exactly the bug class this budget slot exists to buy off. Runtime dependency 5.
 serde_json = "1"
+# The no-clobber rename (§5.4). `RenameFlags::NOREPLACE` maps to `renameat2` under
+# `#[cfg(linux_kernel)]` and `renameatx_np(RENAME_EXCL)` under `#[cfg(apple)]`, so one
+# safe call covers both tier-1 platforms and no `libc` FFI shim exists. Declared as a
+# `cfg(unix)` target dependency in the binary crate so the Windows best-effort tier keeps
+# compiling on the check-then-rename path. Runtime dependency 6.
+rustix = { version = "1.1", features = ["fs"] }
 # Dev-dependencies deliberately do NOT live here. `just dep-budget` harvests
 # `[workspace.dependencies]` as a whole and cannot tell which entries are only
 # ever inherited into a `[dev-dependencies]` table, so a `proptest` line here

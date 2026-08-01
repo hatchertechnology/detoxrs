@@ -19,6 +19,14 @@ clap = { workspace = true }
 walkdir = { workspace = true }
 serde_json = { workspace = true }
 
+# Unix only: `rustix`'s `fs` module is the POSIX surface, and the Windows
+# best-effort tier (owner decision, 2026-07-31) reaches a rename through
+# `fsops::fallback`'s check-then-rename path instead. `just dep-budget` unions
+# `[target.*.dependencies]` into the count, so this is still 6/11 and not a
+# loophole.
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true }
+
 # Versions inline, not workspace-inherited: see the note in the workspace
 # Cargo.toml. `just dep-budget` counts a `[workspace.dependencies]` entry
 # against the runtime budget even when only a dev-dependency inherits it.

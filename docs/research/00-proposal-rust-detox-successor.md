@@ -195,6 +195,17 @@ $ detoxrs ~/Downloads
 Nothing was changed. Re-run with -x to apply.
 ```
 
+> **⚠ This example contradicts §5.6, §2.4 and §9.2, and it is the example that is wrong.**
+> `detoxrs ~/Downloads` without `-r` cleans **only the basename `Downloads` itself**; it does not
+> list or touch that directory's contents. Three sections say so and carry the reasoning (§5.6's
+> "one argument, one name" rule, §2.4's `--help` text, §9.2's migration note); this one example
+> shows upstream `detox`'s behaviour instead, where `-r` gates descent only _past_ the first level.
+> The owner ruled on 2026-08-01 that the three sections win and the implementation follows them
+> (`walk.rs`, verified by `recursion_flag_decides_whether_children_are_processed`). The listing
+> below is therefore what `detoxrs -r ~/Downloads` prints, and the flag is missing from the command
+> line above. It is left in place, flagged rather than silently rewritten, because this is the
+> passage a reader is most likely to copy and the discrepancy is worth seeing once.
+
 Two things in that output that are not defaults, said plainly so nobody has to guess. `Icon\r` is
 skipped because _this user's config_ lists it in `exclude` (§4.2). **There is no built-in default
 exclude list**: the only unconditional skips are `.git`/`.hg`/`.svn` (§5.6) and dotfiles during
