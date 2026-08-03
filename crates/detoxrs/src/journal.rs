@@ -14,6 +14,15 @@
 //! batch aborts, because an unjournaled rename is the one thing `undo` cannot
 //! reverse.
 //!
+//! ponytail: the fsync is on the journal *file*, not on the directory holding it,
+//! so the guarantee is "survives `kill -9`" and not "survives power loss" — after
+//! a hard power cut the file's own directory entry may not be there to find. That
+//! is exactly the threat model §5.5 and §8.4 specify, and the tested one. The
+//! upgrade is one `File::open(dir)?.sync_all()` at create time, plus `F_FULLFSYNC`
+//! on Apple where a plain `fsync` on a directory promises less than it looks like
+//! it does; it is not written here because it would be an untested syscall
+//! defending against a case nobody has asked about.
+//!
 //! Records are built with `serde_json`, never hand-escaped. This artifact is the
 //! safety net and it holds path-derived data; a byte-escaping bug here is exactly
 //! what that dependency slot was spent to buy off.
@@ -156,7 +165,14 @@ impl JournalWrite for Journal {
             "kind": kind_str(item.kind),
             "mtime": secs(item.ident.mtime),
         });
-        put_os(&mut rec, "dir", item.dir.as_os_str());
+        // **Absolute, not as the user spelled it.** The plan carries `.` or
+        // `nested dir`, which resolve against the cwd of the run that wrote them;
+        // a journal is supposed to still mean something tomorrow from a different
+        // directory, and a relative `dir` in it silently does not. `absolute` is
+        // purely lexical and does not resolve symlinks, which matters here: what
+        // gets renamed is a directory entry, and resolving the path would be
+        // recording a different one.
+        put_os(&mut rec, "dir", absolute(&item.dir).as_os_str());
         put_os(&mut rec, "from", &item.from);
         put_os(&mut rec, "to", &item.to);
         self.write_line(&rec)?;
@@ -313,11 +329,40 @@ pub fn list() -> io::Result<Vec<PathBuf>> {
 
 /// The path of a batch named by id.
 ///
+/// The id comes from the command line, so it is validated rather than trusted: it
+/// names one file inside the journal directory and nothing else. Nothing terrible
+/// is reachable through it — a journal is only ever read, and every rename it
+/// describes still goes through the identity recheck — but "the worst case looks
+/// survivable" is not a reason to join unvalidated input onto a path.
+///
 /// # Errors
 ///
-/// Any failure to locate the journal directory.
+/// [`io::ErrorKind::InvalidInput`] if the id contains a path separator or `..`;
+/// any failure to locate the journal directory.
 pub fn path_of(id: &str) -> io::Result<PathBuf> {
+    if id.is_empty() || id.contains('/') || id.contains('\\') || id.contains("..") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{id:?} is not a batch id; ids look like 20260801T142233Z-a91c"),
+        ));
+    }
     Ok(journal_dir()?.join(format!("{id}.jsonl")))
+}
+
+/// `path` made absolute without resolving a single symlink.
+///
+/// Falls back to the path as given if the cwd cannot be read: a journal line with
+/// a relative directory is worse than one with an absolute directory, and both are
+/// better than no line at all, which is what returning an error here would cost.
+fn absolute(path: &Path) -> PathBuf {
+    // A bare relative argument (`detoxrs file.txt`) has an empty parent, and
+    // `std::path::absolute("")` is an error rather than the cwd.
+    let path = if path.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        path
+    };
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// `$XDG_STATE_HOME/detoxrs/journal`, or `$HOME/.local/state/detoxrs/journal`.

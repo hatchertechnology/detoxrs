@@ -35,7 +35,7 @@ mod report;
 mod walk;
 
 use clap::Parser as _;
-use detoxrs_core::plan::{Plan, PlanError, plan};
+use detoxrs_core::plan::{Plan, PlanError, Resolution, plan};
 use detoxrs_core::policy::Policy;
 use fsops::PlatformRenameOps;
 use std::io::{self, Write as _};
@@ -67,7 +67,7 @@ fn run(args: &cli::Cli) -> Result<u8, String> {
     let p = plan(&entries, &policy, args.on_collision.into(), case).map_err(describe)?;
 
     if args.exec {
-        exec(&p, &policy, args.json)
+        exec(&p, &policy, args.json, args.quiet)
     } else {
         preview(&p, args).map(|()| 0)
     }
@@ -93,7 +93,14 @@ fn preview(p: &Plan, args: &cli::Cli) -> Result<(), String> {
 /// The journal is opened **before** the first rename and its failure is exit 2
 /// with nothing attempted, which is §5.8's rule stated as control flow: renaming
 /// without a journal is the one outcome `undo` cannot fix.
-fn exec(p: &Plan, policy: &Policy, as_json: bool) -> Result<u8, String> {
+fn exec(p: &Plan, policy: &Policy, as_json: bool, quiet: bool) -> Result<u8, String> {
+    // Nothing to rename means no journal, and that is not tidiness: an empty batch
+    // would be the newest one, so `undo --last` would stop meaning "undo what I
+    // just did" after any no-op `-x` run.
+    if !p.items.iter().any(|i| i.resolution == Resolution::Rename) {
+        return report_nothing(p, as_json, quiet).map(|()| 0);
+    }
+
     let cwd = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let mut j = journal::Journal::create(policy, &cwd).map_err(|e| {
         format!("cannot open an undo journal ({e}); nothing was renamed. See detoxrs undo --list.")
@@ -103,10 +110,12 @@ fn exec(p: &Plan, policy: &Policy, as_json: bool) -> Result<u8, String> {
 
     let stdout = io::stdout();
     let mut out = stdout.lock();
-    // Written to a buffer first only when --json is on, because a JSON document
-    // and per-item progress lines cannot share stdout.
+    // Progress lines go nowhere under --json (a JSON document and per-item lines
+    // cannot share stdout) and nowhere under -q, which means errors only on the
+    // write path exactly as it does on the read path. The renames still happen and
+    // the failures still reach stderr; it is the reporting that is silenced.
     let mut sink: Vec<u8> = Vec::new();
-    let s = if as_json {
+    let s = if as_json || quiet {
         apply::run(&p.items, &PlatformRenameOps, &mut j, &mut sink)
     } else {
         apply::run(&p.items, &PlatformRenameOps, &mut j, &mut out)
@@ -114,13 +123,35 @@ fn exec(p: &Plan, policy: &Policy, as_json: bool) -> Result<u8, String> {
 
     if as_json {
         report::json(&mut out, p, Some(&s.outcomes))
+    } else if quiet {
+        Ok(())
     } else {
-        report::applied(&mut out, p, &s, &batch, &where_)
+        report::applied(&mut out, p, &s, Some((&batch, &where_)))
     }
     .and_then(|()| out.flush())
     .map_err(|e| format!("cannot write output: {e}"))?;
 
     Ok(s.exit_code())
+}
+
+/// An `-x` run that found nothing to rename: the same closing report, minus the
+/// undo line, and no journal was opened.
+fn report_nothing(p: &Plan, as_json: bool, quiet: bool) -> Result<(), String> {
+    let empty = apply::Summary {
+        outcomes: vec![apply::ItemResult::NotAttempted; p.items.len()],
+        ..apply::Summary::default()
+    };
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+    if as_json {
+        report::json(&mut out, p, Some(&empty.outcomes))
+    } else if quiet {
+        Ok(())
+    } else {
+        report::applied(&mut out, p, &empty, None)
+    }
+    .and_then(|()| out.flush())
+    .map_err(|e| format!("cannot write output: {e}"))
 }
 
 /// `detoxrs undo`.

@@ -75,7 +75,10 @@ pub fn preview(w: &mut impl Write, plan: &Plan, show_unchanged: bool) -> io::Res
 ///
 /// The batch id goes in the output rather than only in the journal filename: a
 /// user who has just renamed 400 files needs the one string that undoes it, and
-/// making them go and look for it is how `undo` ends up unused.
+/// making them go and look for it is how `undo` ends up unused. `journal` is
+/// `None` when the run had nothing to rename and so deliberately opened no
+/// journal — printing an undo command for a batch that does not exist would be
+/// worse than printing nothing.
 ///
 /// # Errors
 ///
@@ -84,8 +87,7 @@ pub fn applied(
     w: &mut impl Write,
     plan: &Plan,
     s: &Summary,
-    batch: &str,
-    journal_path: &str,
+    journal: Option<(&str, &str)>,
 ) -> io::Result<()> {
     let t = Tally::of(&plan.items);
     // Items the plan never intended to rename are reported the same way the
@@ -109,8 +111,10 @@ pub fn applied(
     if let Some(why) = &s.aborted {
         writeln!(w, "The batch stopped early: {why}")?;
     }
-    writeln!(w, "Undo with: detoxrs undo {batch}")?;
-    writeln!(w, "Journal: {journal_path}")?;
+    if let Some((batch, path)) = journal {
+        writeln!(w, "Undo with: detoxrs undo {batch}")?;
+        writeln!(w, "Journal: {path}")?;
+    }
     not_utf8_hint(w, t)
 }
 

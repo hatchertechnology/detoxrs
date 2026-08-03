@@ -1,4 +1,4 @@
-# Handoff — state as of 2026-08-01 (WP5b complete)
+# Handoff — state as of 2026-08-03 (M1 complete, self-review applied)
 
 Written at the end of a long orchestration session, so a fresh session can resume without
 re-deriving anything. Read `docs/plans/unified-draft-plan.md` first; it is the spec being
@@ -68,10 +68,47 @@ off the on-disk journal that at most one item has an `intent` with no outcome, t
 restores every completed rename, and that the tree neither gained nor lost an entry. It asserts it
 was _actually_ interrupted rather than passing vacuously if the machine is fast.
 
+## The self-review pass, 2026-08-03
+
+Not a substitute for the separate-team review — the author reading their own code catches the
+mechanical defects and misses the design ones. Four real defects, all in WP5b, all now fixed with a
+test written first that reproduced each one:
+
+1. **The journal recorded `"dir": "."`.** The plan carries directories as the user spelled them, so
+   `undo` only worked from the original working directory and failed confusingly anywhere else. Now
+   recorded absolute, via `std::path::absolute`, which is purely lexical and resolves no symlinks —
+   that matters, because what gets renamed is a directory entry and resolving the path would record a
+   different one. `undo_works_from_a_different_working_directory` has a same-named decoy tree to
+   catch a regression that resolves against the wrong root.
+2. **An `-x` run with nothing to rename still created a journal.** Not litter: the empty batch
+   became the newest one, so `undo --last` stopped meaning "undo what I just did" after any no-op
+   `-x`. No renames now means no journal.
+3. **`-q` was ignored on the write path.** "Errors only" has to mean the same thing on both sides of
+   the `-x` branch.
+4. **`undo <BATCH-ID>` joined an unvalidated argument onto a path.** Only ever read, and every rename
+   it describes still goes through the identity recheck, so nothing terrible was reachable — but a
+   trust boundary is a trust boundary. Ids are now rejected if they contain a separator or `..`.
+
+Two things were examined and deliberately left alone, both recorded where the code is rather than
+only here:
+
+- **The fsync is on the journal file, not its directory**, so the guarantee is "survives `kill -9`"
+  and not "survives power loss". That is exactly the threat model §5.5 and §8.4 specify and the one
+  that is tested. The upgrade is named in `journal.rs`'s module docs, with its cost (`F_FULLFSYNC` on
+  Apple, where a plain directory `fsync` promises less than it looks like it does).
+- **Rung 1 of the rename fallback treats two hardlinks to one inode as a same-inode respell.** POSIX
+  requires `rename` over two names for one file to succeed and perform no other action, so neither
+  name is destroyed; the planner will not normally produce such an item anyway. Argued in
+  `fsops/fallback.rs`.
+
 ## Resume here: implementation review
 
-M1's code is done; nobody outside the session that wrote it has read it. The review pass and the
-opus adjudication of that review are the two remaining rows in the table above.
+M1's code is done and self-reviewed; nobody outside the session that wrote it has read it. The
+separate-team review and the opus adjudication of that review are the two remaining rows above.
+Points worth aiming a reviewer at, because they are where a defect would be expensive rather than
+merely wrong: the apply loop's step order in `apply.rs`, the `undo`-reuses-`apply` decision (it buys
+undo-of-undo for free, and it means a bug in `attempt` is a bug in both directions), and the batch-id
+ordering property that `--last` depends on.
 
 ## Closed: `-r` semantics
 

@@ -141,6 +141,112 @@ fn undo_list_names_the_batches_and_undo_needs_one() {
     assert!(stderr(&bare).contains("--last"), "{}", stderr(&bare));
 }
 
+/// A run with nothing to rename must not leave a journal behind. An empty batch
+/// is not merely litter: it becomes the newest one, so `undo --last` would stop
+/// meaning "undo what I just did" after any no-op `-x` run.
+#[test]
+fn a_run_with_nothing_to_rename_leaves_no_journal() {
+    let f = Fixture::new();
+    f.write("a file.txt", b"x");
+    f.run().args(["-x", "-r", "."]).assert().success();
+    assert_eq!(f.journals().len(), 1);
+
+    // Everything is clean now, so this run has nothing to do.
+    let out = f.run().args(["-x", "-r", "."]).output().expect("runs");
+    assert_eq!(out.status.code(), Some(0), "{:?}", stderr(&out));
+    assert_eq!(f.journals().len(), 1, "a no-op run wrote a journal");
+
+    // And --last still means the batch that actually did something.
+    f.run().args(["undo", "--last"]).assert().success();
+    assert!(f.path("a file.txt").exists());
+}
+
+/// A journal is only durable if it still means something tomorrow, from wherever
+/// you happen to be standing. The plan carries directories as the user spelled
+/// them on the command line — `.`, `nested dir` — so an undo run from anywhere
+/// else has to resolve them against the *recorded* directory, not the current one.
+#[test]
+fn undo_works_from_a_different_working_directory() {
+    let f = Fixture::new();
+    fs::create_dir(f.path("sub dir")).expect("mkdir");
+    f.write("sub dir/a file.txt", b"x");
+    let before = census(f.tree.path());
+
+    f.run().args(["-x", "-r", "."]).assert().success();
+
+    // Somewhere else entirely, with a decoy of the same relative name to catch an
+    // undo that resolves `.` against the wrong root.
+    let elsewhere = tempfile::tempdir().expect("tempdir");
+    fs::create_dir(elsewhere.path().join("sub_dir")).expect("mkdir");
+    fs::write(elsewhere.path().join("sub_dir/a_file.txt"), b"decoy").expect("write");
+
+    let out = detoxrs(elsewhere.path(), f.state.path())
+        .args(["undo", "--last"])
+        .output()
+        .expect("runs");
+
+    assert_eq!(out.status.code(), Some(0), "{:?}", stderr(&out));
+    assert_eq!(before, census(f.tree.path()), "undo must restore the tree");
+    assert_eq!(
+        fs::read(elsewhere.path().join("sub_dir/a_file.txt")).expect("read"),
+        b"decoy",
+        "the decoy must not have been touched"
+    );
+}
+
+/// A batch id names a file inside the journal directory and nothing else. It comes
+/// straight from the command line, so it is a trust boundary however harmless the
+/// worst case looks.
+#[test]
+fn a_batch_id_cannot_escape_the_journal_directory() {
+    let f = Fixture::new();
+    let outside = f.state.path().join("secret.jsonl");
+    fs::write(&outside, b"{\"v\":1}\n").expect("write");
+
+    for id in [
+        "../secret",
+        "..%2fsecret",
+        "/etc/passwd",
+        "sub/../../secret",
+    ] {
+        let out = f.run().args(["undo", id]).output().expect("runs");
+        assert_eq!(out.status.code(), Some(2), "{id} was accepted");
+        assert!(stderr(&out).contains("batch id"), "{id}: {}", stderr(&out));
+    }
+}
+
+/// `-q` is "errors only", and that has to mean the same thing on the write path as
+/// on the read path.
+#[test]
+fn quiet_suppresses_the_applied_report_but_not_errors() {
+    let f = Fixture::new();
+    f.write("a file.txt", b"x");
+
+    let ok = f
+        .run()
+        .args(["-x", "-q", "-r", "."])
+        .output()
+        .expect("runs");
+    assert_eq!(ok.status.code(), Some(0), "{:?}", stderr(&ok));
+    assert!(ok.stdout.is_empty(), "stdout was: {:?}", ok.stdout);
+    assert!(
+        f.path("a_file.txt").exists(),
+        "-q must not stop the renames"
+    );
+
+    // An error still has to arrive, on stderr, where errors go.
+    f.write("b file.txt", b"source");
+    f.write("b_file.txt", b"squatter");
+    let bad = f
+        .run()
+        .args(["-x", "-q", "b file.txt"])
+        .output()
+        .expect("runs");
+    assert_eq!(bad.status.code(), Some(1));
+    assert!(bad.stdout.is_empty());
+    assert!(!stderr(&bad).is_empty());
+}
+
 /// §8.4's apply-time TOCTOU row, deterministic and with no sleep in it.
 ///
 /// The race is real rather than simulated: collision layer 2 compares against the
