@@ -154,8 +154,10 @@ pub(crate) fn collapse(s: &str, separator: char) -> String {
 ///
 /// Strips a leading `-`, leading and trailing separators, leading and trailing
 /// dots and spaces, and then restores exactly `leading_dots` leading dots --
-/// `leading_dots` being the count from `transform`'s *original* input, not from
-/// this stage's input.
+/// `leading_dots` being the count from `run_with`'s input *after* normalization
+/// and invisible-stripping (stages 3 and 4), not from this stage's own input
+/// and not from the untouched original (C-5: an invisible character ahead of
+/// the dots is not a dot, and must not zero the count).
 ///
 /// Preserving the original run verbatim rather than "exactly one dot" is what
 /// makes Dotfile preservation true in both directions: collapsing `..weird` to
@@ -193,8 +195,6 @@ fn apply_truncate(text: &str, limits: &Limits) -> (String, bool) {
 
 /// Plan §5.2's seam. `transform` is this with nothing disabled.
 pub(crate) fn run_with(input: &str, p: &Policy, disabled: StageMask) -> TransformResult {
-    let leading_dots = input.chars().take_while(|c| *c == '.').count();
-
     let mut text = input.to_owned();
     if !disabled.has(StageMask::NORMALIZE) {
         text = normalize(&text);
@@ -202,6 +202,15 @@ pub(crate) fn run_with(input: &str, p: &Policy, disabled: StageMask) -> Transfor
     if !disabled.has(StageMask::INVISIBLE) {
         text = strip_invisible(&text);
     }
+    // Counted here, after normalization and invisible-stripping but before the
+    // safe map, collapse, or trim -- not from `input` (C-5). An invisible
+    // character (ZWSP, BOM, ...) ahead of a dotfile's dots is not itself a dot,
+    // so counting on the original input undercounts to zero and `trim` below
+    // then has nothing to restore: `\u{200b}.bashrc` lost its dot and stopped
+    // being a dotfile. Counting after stage 4 instead measures the dots that
+    // are actually leading once the invisible has been removed, which is what
+    // "leading dots" is supposed to mean.
+    let leading_dots = text.chars().take_while(|c| *c == '.').count();
     if !disabled.has(StageMask::SAFE_MAP) {
         text = safe_map(&text, p.separator);
     }
@@ -305,6 +314,21 @@ mod tests {
         assert_eq!(name("cafe\u{301}.txt"), "caf\u{e9}.txt");
         assert_eq!(name("in\u{200b}visible.txt"), "invisible.txt");
         assert_eq!(name("invoice\u{202e}fdp.txt"), "invoicefdp.txt");
+    }
+
+    /// C-5: an invisible character ahead of a dotfile's dots is not itself a
+    /// dot. Counting `leading_dots` on the untouched original input undercounts
+    /// to zero here, `trim` then has nothing to restore, and `.bashrc` /
+    /// `.gitignore` stop being dotfiles -- silently, and in the direction the
+    /// doc comment claims never happens.
+    #[test]
+    fn an_invisible_character_before_a_dotfile_does_not_unhide_it() {
+        assert_eq!(name("\u{200b}.bashrc"), ".bashrc");
+        assert_eq!(name("\u{feff}.gitignore"), ".gitignore");
+        assert_eq!(name("\u{200b}..hidden"), "..hidden");
+        // The dot count must still come out right when the invisible sits
+        // between two of the dots, not just in front of all of them.
+        assert_eq!(name(".\u{200b}.hidden"), "..hidden");
     }
 
     #[test]

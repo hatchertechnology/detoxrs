@@ -212,7 +212,20 @@ fn astral_emoji_corpus_entry_satisfies_both_limits() {
     }
 }
 
+/// Whether `s` starts with exactly one `.`, once leading invisible characters
+/// (stage 4's own subject) are looked past.
+///
+/// C-5: an invisible character in front of a dot is not itself a dot, and it
+/// is not visible content either -- `transform` deletes it. Comparing raw
+/// literal first characters, as this helper did before, made the property
+/// blind to C-5: for `"\u{200b}.bashrc"`, the literal check said "does not
+/// start with a dot" both before and after the bug's fix removed the leading
+/// dot, so the mismatch this property exists to catch never showed up. This
+/// is not the property's subject changing -- "did we manufacture or destroy a
+/// dotfile" was always about the name's real leading dot, and an invisible
+/// character was never part of that name's real content.
 fn exactly_one_leading_dot(s: &str) -> bool {
+    let s = s.trim_start_matches(detoxrs_core::invisible::is_invisible);
     s.strip_prefix('.')
         .is_some_and(|rest| !rest.starts_with('.'))
 }
