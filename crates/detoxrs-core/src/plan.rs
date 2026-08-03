@@ -275,6 +275,7 @@ pub fn plan(
             bytes: p.max_len_bytes,
             utf16: p.max_len_utf16,
         },
+        policy: *p,
     };
     for (pos, &i) in order.iter().enumerate() {
         allocator
@@ -527,6 +528,11 @@ struct Allocator {
     case: VolumeCase,
     /// The length budget every candidate must satisfy.
     limits: Limits,
+    /// The policy `numbered()`'s candidates are checked against (C-4):
+    /// `transform` is the sole authority on what is safe, so a hand-built
+    /// candidate is only trusted after `transform` agrees it is already its
+    /// own fixed point.
+    policy: Policy,
 }
 
 impl Allocator {
@@ -559,11 +565,31 @@ impl Allocator {
             return Some(want.to_owned());
         }
         for n in FIRST_NUMBER..=LAST_NUMBER {
-            // `None` is not "try the next N": a longer suffix is never shorter,
-            // so if `-2` does not fit the limit, nothing does. Bailing here is
-            // what keeps the probe count at or below the 998 ceiling instead of
-            // spinning through all of them at a 2-byte limit.
-            let candidate = numbered(want, n, &self.limits)?;
+            // `None` from `numbered` is not "try the next N": a longer suffix
+            // is never shorter, so if `-2` does not fit the limit, nothing
+            // does. Bailing here is what keeps the probe count at or below the
+            // 998 ceiling instead of spinning through all of them at a 2-byte
+            // limit.
+            let Some(candidate) = numbered(want, n, &self.limits) else {
+                break;
+            };
+            // C-4: string surgery is not proof. `numbered` inserts `-N` before
+            // the extension by construction, never by running the result back
+            // through `transform` -- so when truncation leaves the kept stem
+            // ending in `-`, the appended `-N` manufactures a `--` run that
+            // stage 9 later collapses, and the destination this function
+            // handed back was never a fixed point of `transform` at all. A
+            // non-fixed-point destination is the one thing §5.3's whole
+            // safety argument assumes cannot happen: it is a name a
+            // subsequent run renames again, which is exactly what silently
+            // invalidates the batch that produced it. Unlike a too-long
+            // candidate, a non-fixed-point one does *not* imply every larger
+            // `N` is equally bad (a different suffix length truncates the
+            // stem to a different length and may not end in `-`), so this
+            // continues the probe instead of breaking it.
+            if !is_fixed_point(&candidate, &self.policy) {
+                continue;
+            }
             let key = key_of_text(&candidate, self.case);
             if self.is_free(dir_ident, &key, owner) {
                 self.allocated.insert((dir_ident, key));
@@ -572,6 +598,16 @@ impl Allocator {
         }
         None
     }
+}
+
+/// Is `candidate` already what `transform` would produce from it?
+///
+/// The invariant every destination `plan()` emits must satisfy (C-4): the
+/// direct `transform` output is a fixed point by Idempotence, but a
+/// hand-built candidate such as `numbered()`'s is not exempt from the same
+/// check just because it was built to fit the length limit.
+fn is_fixed_point(candidate: &str, p: &Policy) -> bool {
+    matches!(transform(candidate, p), TransformResult::Name(o) if o.text == candidate)
 }
 
 /// `want` with `-N` inserted before the extension, truncated to fit both limits.
@@ -1049,6 +1085,38 @@ mod tests {
         for i in &plan.items {
             if matches!(i.resolution, Resolution::Conflict(_)) {
                 assert_eq!(i.from, i.to, "a conflicted item must keep its own name");
+            }
+        }
+    }
+
+    /// C-4 / O1-1's minimal reproduction: at a tight limit, the first numbered
+    /// candidate the naive construction would try (`-2`) truncates the stem to
+    /// something ending in `-`, and appending `-2` there manufactures a `--`
+    /// run that `transform` itself would collapse. The allocator must not hand
+    /// that name back; it must keep probing until it finds one `transform`
+    /// agrees is already a fixed point.
+    #[test]
+    fn a_numbered_destination_is_always_a_fixed_point() {
+        let p = Policy::new('_', 9, 9).expect("'_' is Keep-class");
+        let entries: Vec<Entry> = ["ab-cd .txt", "ab-cd.txt"]
+            .iter()
+            .map(|n| entry(n))
+            .collect();
+        let plan = plan(&entries, &p, OnCollision::Number, VolumeCase::Sensitive).expect("plan");
+        for item in &plan.items {
+            if item.resolution != Resolution::Rename {
+                continue;
+            }
+            let to = item.to.to_str().expect("ascii");
+            match transform(to, &p) {
+                TransformResult::Name(o) => assert_eq!(
+                    o.text, to,
+                    "{to:?} is not a fixed point of transform (from {:?})",
+                    item.from
+                ),
+                TransformResult::Unrepresentable(r) => {
+                    panic!("{to:?} -> Unrepresentable({r:?})")
+                }
             }
         }
     }

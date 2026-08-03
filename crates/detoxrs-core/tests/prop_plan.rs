@@ -369,6 +369,32 @@ proptest! {
         }
     }
 
+    /// **Fixed-point destinations (C-4).** Every `Rename` item's `to` is
+    /// already what `transform` would produce from it -- not just the direct
+    /// `transform` output (a fixed point by Idempotence, trivially), but also
+    /// every numbered alternative the collision allocator hands back. A
+    /// destination that is not a fixed point is one a subsequent run renames
+    /// again, which is what silently invalidated a prior batch's undo.
+    #[test]
+    fn every_destination_is_a_fixed_point(
+        entries in snapshot(),
+        p in support::policy_or_default(),
+        case in volume_case(),
+    ) {
+        let Some(plan) = planned(&entries, &p, OnCollision::Number, case) else { return Ok(()) };
+        for item in renames(&plan) {
+            let to = item.to.to_str().expect("a renamed destination is always text");
+            match detoxrs_core::pipeline::transform(to, &p) {
+                detoxrs_core::pipeline::TransformResult::Name(o) => {
+                    prop_assert_eq!(&o.text, to, "{:?} is not a fixed point of transform", to);
+                }
+                detoxrs_core::pipeline::TransformResult::Unrepresentable(r) => {
+                    prop_assert!(false, "{:?} -> Unrepresentable({r:?})", to);
+                }
+            }
+        }
+    }
+
     /// **Determinism.** Shuffling the input entry list produces an identical
     /// plan, including collision numbering. This is the executable form of
     /// detox's `readdir()`-order dependence being gone: which file "loses" a
