@@ -93,7 +93,7 @@ fn preview(p: &Plan, args: &cli::Cli) -> Result<(), String> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
     if args.json {
-        report::json(&mut out, p, None)
+        report::json(&mut out, p, None, None)
     } else if args.quiet {
         Ok(()) // --quiet is errors only, and a preview is not an error.
     } else {
@@ -146,7 +146,7 @@ fn exec(p: &Plan, policy: &Policy, as_json: bool, quiet: bool) -> Result<u8, Str
     }
 
     let report_result = if as_json {
-        report::json(&mut out, p, Some(&s.outcomes))
+        report::json(&mut out, p, Some(&s.outcomes), Some((&batch, &where_)))
     } else if quiet {
         Ok(())
     } else {
@@ -184,7 +184,7 @@ fn report_nothing(p: &Plan, as_json: bool, quiet: bool) -> Result<(), String> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
     if as_json {
-        report::json(&mut out, p, Some(&empty.outcomes))
+        report::json(&mut out, p, Some(&empty.outcomes), None)
     } else if quiet {
         Ok(())
     } else {

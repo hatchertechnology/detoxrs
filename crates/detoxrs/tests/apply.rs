@@ -491,6 +491,45 @@ fn json_reports_what_was_applied_and_with_what_guarantee() {
     assert!(text.contains("\"atomicity\":"), "{text}");
 }
 
+/// C15: `--json` is documented as the stable machine contract, but it used to
+/// omit the batch id and journal path — the one thing a machine consumer needs
+/// in order to call `undo` on the batch it just applied. A preview, and an `-x`
+/// run with nothing to rename, open no journal, so both must report `null`
+/// rather than a batch that does not exist.
+#[test]
+fn json_reports_the_batch_id_and_journal_path_needed_for_undo() {
+    let f = Fixture::new();
+    f.write("a file.txt", b"x");
+
+    let preview = f
+        .run()
+        .args(["--json", "a file.txt"])
+        .output()
+        .expect("runs");
+    let doc: serde_json::Value =
+        serde_json::from_slice(&preview.stdout).expect("preview stdout must be valid JSON");
+    assert_eq!(doc["batch"], serde_json::Value::Null, "{doc}");
+    assert_eq!(doc["journal"], serde_json::Value::Null, "{doc}");
+
+    let applied = f
+        .run()
+        .args(["-x", "--json", "a file.txt"])
+        .output()
+        .expect("runs");
+    let doc: serde_json::Value =
+        serde_json::from_slice(&applied.stdout).expect("applied stdout must be valid JSON");
+    let batch = doc["batch"].as_str().expect("batch id must be a string");
+    let journal = doc["journal"]
+        .as_str()
+        .expect("journal path must be a string");
+    assert!(!batch.is_empty(), "{doc}");
+    assert!(std::path::Path::new(journal).exists(), "{doc}");
+
+    // The batch id `--json` reports must be the one `undo` accepts.
+    let undo = f.run().args(["undo", batch]).output().expect("runs");
+    assert!(undo.status.success(), "{}", stderr(&undo));
+}
+
 /// A journal that cannot be created means nothing is renamed at all, because a
 /// rename that is not recorded is the one thing `undo` cannot reverse (§5.8).
 /// `XDG_STATE_HOME` pointing at a plain file is the cheapest way to make
