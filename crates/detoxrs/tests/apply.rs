@@ -426,6 +426,46 @@ fn a_destination_occupied_at_snapshot_time_is_numbered_away() {
     assert!(!f.path("Screen Shot.png").exists());
 }
 
+/// C2 regression: two arguments naming the same real directory under different
+/// spellings (`"de ep/d ir"` and its sibling reached via `"de ep/../de ep"`)
+/// must not let the outer directory's own rename apply before the rename of
+/// the entry inside it. Before the fix, ordering was keyed on
+/// `dir.components().count()`, which gave `"de ep/../de ep"` -- three
+/// components -- a *smaller* count than `"de ep/d ir"`'s two, so the parent
+/// sorted as shallower than its own contents and was renamed first, leaving
+/// `de ep/d ir` and its file to fail with `ENOENT` against a batch that had
+/// already renamed their containing directory out from under them.
+#[test]
+fn overlapping_arguments_rename_deepest_first() {
+    let f = Fixture::new();
+    fs::create_dir_all(f.path("de ep/d ir")).expect("mkdir -p");
+    f.write("de ep/d ir/fi le.txt", b"hi");
+
+    let out = f
+        .run()
+        .args(["-x", "-r", "de ep/d ir", "de ep/../de ep"])
+        .output()
+        .expect("runs");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "the whole batch must apply cleanly, not half-apply with ENOENTs: {:?}",
+        stderr(&out)
+    );
+    let text = String::from_utf8(out.stdout).expect("utf8");
+    assert!(text.contains("3 renamed"), "{text}");
+    assert!(text.contains("0 failed"), "{text}");
+
+    assert_eq!(
+        fs::read(f.path("de_ep/d_ir/fi_le.txt")).expect("read"),
+        b"hi",
+        "every level must have been renamed, not left behind under the old name"
+    );
+    assert!(!f.path("de ep").exists());
+    assert!(!f.path("de_ep/d ir").exists());
+    assert!(!f.path("de_ep/d_ir/fi le.txt").exists());
+}
+
 #[test]
 fn json_reports_what_was_applied_and_with_what_guarantee() {
     let f = Fixture::new();

@@ -22,7 +22,7 @@ use detoxrs_core::plan::{
 };
 use detoxrs_core::policy::Policy;
 use proptest::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -56,11 +56,6 @@ fn renames(p: &Plan) -> impl Iterator<Item = &PlanItem> {
     p.items
         .iter()
         .filter(|i| i.resolution == Resolution::Rename)
-}
-
-/// `dir/name`, the full path an item refers to.
-fn path_of(dir: &Path, name: &OsStr) -> PathBuf {
-    dir.join(name)
 }
 
 // ---- generators ---------------------------------------------------------------
@@ -200,6 +195,192 @@ fn build_snapshot(root: &[String], mid: &[String], deep: &[String]) -> Vec<Entry
     out
 }
 
+// ---- C16: a generator that can actually refute Order safety ------------------
+//
+// `snapshot()` above builds every entry's `dir` from one canonical `PathBuf`
+// per level (`t`, `t/a b`, `t/a b/c d`), so it is structurally incapable of
+// exercising C2: there is only ever one spelling of each directory, and a
+// bug that appears only when two arguments spell the same directory
+// differently (`"de ep/d ir"` vs `"de ep/../de ep"`) cannot be triggered by a
+// generator that never produces a second spelling. Order safety gets its own
+// generator below for exactly this reason, mirroring real snapshots where the
+// same directory's identity (`dir_ident`/`ident`) never depends on which
+// spelling of its path a given entry happened to be discovered under.
+
+/// One of the fixture's three nesting levels. Real identity (`(dev, ino)`)
+/// depends on which directory something is, never on how its path is typed --
+/// so identity here is keyed on the level, and the text used for `dir` is
+/// chosen independently per entry from either of two spellings of that same
+/// level.
+#[derive(Clone, Copy)]
+enum Level {
+    Root,
+    Mid,
+    Deep,
+}
+
+const fn level_ident(level: Level) -> Ident {
+    let ino = match level {
+        Level::Root => 9001,
+        Level::Mid => 9002,
+        Level::Deep => 9003,
+    };
+    Ident {
+        dev: 9,
+        ino,
+        nlink: 1,
+        mtime: SystemTime::UNIX_EPOCH,
+    }
+}
+
+const fn level_dir_ident(level: Level) -> DirIdent {
+    let Ident { dev, ino, .. } = level_ident(level);
+    (dev, ino)
+}
+
+/// Two distinct spellings of the same real directory at `level` -- the C2
+/// counterexample itself (`"de ep/d ir"` vs `"de ep/../de ep"`), scaled down to
+/// this fixture's own directory names.
+fn level_dir_text(level: Level, alt: bool) -> PathBuf {
+    match (level, alt) {
+        (Level::Root, false) => PathBuf::from("t"),
+        (Level::Root, true) => PathBuf::from("t/sib/.."),
+        (Level::Mid, false) => PathBuf::from("t/a b"),
+        (Level::Mid, true) => PathBuf::from("t/a b/sib/.."),
+        (Level::Deep, false) => PathBuf::from("t/a b/c d"),
+        (Level::Deep, true) => PathBuf::from("t/a b/c d/sib/.."),
+    }
+}
+
+/// Order safety's own generator (C16): every entry -- including the two
+/// directory entries themselves -- independently picks one of two spellings
+/// for its `dir`, while `dir_ident`/`ident` stay keyed on the level, exactly
+/// as a real walk's `dir_ident_of` resolves both spellings of one directory to
+/// one identity. A generator that only ever emitted the canonical spelling
+/// (as `snapshot()` does) cannot refute a defect that requires two.
+fn snapshot_with_overlapping_spellings() -> impl Strategy<Value = Vec<Entry>> {
+    (
+        proptest::collection::vec((plan_name(), any::<bool>()), 0..4),
+        proptest::collection::vec((plan_name(), any::<bool>()), 0..4),
+        proptest::collection::vec((plan_name(), any::<bool>()), 0..3),
+        any::<bool>(),
+        any::<bool>(),
+    )
+        .prop_map(|(root, mid, deep, ab_alt, cd_alt)| {
+            build_snapshot_with_spellings(&root, &mid, &deep, ab_alt, cd_alt)
+        })
+}
+
+fn build_snapshot_with_spellings(
+    root: &[(String, bool)],
+    mid: &[(String, bool)],
+    deep: &[(String, bool)],
+    ab_alt: bool,
+    cd_alt: bool,
+) -> Vec<Entry> {
+    let mut out = Vec::new();
+    let mut seen: HashSet<(DirIdent, OsString)> = HashSet::new();
+
+    let mut push = |dir: PathBuf,
+                    dir_ident_val: DirIdent,
+                    name: &str,
+                    kind: EntryKind,
+                    entry_ident: Ident,
+                    out: &mut Vec<Entry>| {
+        let os = OsString::from(name);
+        if !seen.insert((dir_ident_val, os.clone())) {
+            return; // a real snapshot never lists the same entry twice
+        }
+        out.push(Entry {
+            dir,
+            name: os,
+            kind,
+            ident: entry_ident,
+            dir_ident: dir_ident_val,
+            depth: 0,
+        });
+    };
+
+    push(
+        level_dir_text(Level::Root, ab_alt),
+        level_dir_ident(Level::Root),
+        "a b",
+        EntryKind::Dir,
+        level_ident(Level::Mid),
+        &mut out,
+    );
+    push(
+        level_dir_text(Level::Mid, cd_alt),
+        level_dir_ident(Level::Mid),
+        "c d",
+        EntryKind::Dir,
+        level_ident(Level::Deep),
+        &mut out,
+    );
+    let mut ino = 0u64;
+    for (n, alt) in root {
+        ino += 1;
+        push(
+            level_dir_text(Level::Root, *alt),
+            level_dir_ident(Level::Root),
+            n,
+            EntryKind::File,
+            ident(ino),
+            &mut out,
+        );
+    }
+    for (n, alt) in mid {
+        ino += 1;
+        push(
+            level_dir_text(Level::Mid, *alt),
+            level_dir_ident(Level::Mid),
+            n,
+            EntryKind::File,
+            ident(ino),
+            &mut out,
+        );
+    }
+    for (n, alt) in deep {
+        ino += 1;
+        push(
+            level_dir_text(Level::Deep, *alt),
+            level_dir_ident(Level::Deep),
+            n,
+            EntryKind::File,
+            ident(ino),
+            &mut out,
+        );
+    }
+    out
+}
+
+/// Whether `current` (some entry's `dir_ident`) is `target`, or transitively
+/// contained in it, walked through `parent_of_identity` -- built from the
+/// snapshot's own directory entries, never from any path's text (C2). This is
+/// deliberately independent of `plan.rs`'s own `structural_depth`: borrowing
+/// the implementation's notion of containment would make the property
+/// vacuous against a shared bug in both.
+fn identity_contains(
+    parent_of_identity: &HashMap<DirIdent, DirIdent>,
+    target: DirIdent,
+    mut current: DirIdent,
+) -> bool {
+    let mut guard = 0;
+    loop {
+        if current == target {
+            return true;
+        }
+        guard += 1;
+        if guard > parent_of_identity.len() + 1 {
+            return false; // cycle guard; a real filesystem has none
+        }
+        match parent_of_identity.get(&current) {
+            Some(&next) if next != current => current = next,
+            _ => return false,
+        }
+    }
+}
+
 /// `plan()` must not error on any snapshot a walk could produce: `BatchRefused`
 /// is the one legitimate error and only under `fail`, and
 /// `InternalInconsistency` firing at all is §5.3's Idempotence proof breaking.
@@ -284,28 +465,52 @@ proptest! {
 
     /// **Order safety.** Applying the plan in the plan's own order never renames
     /// a directory before an item inside it.
+    ///
+    /// Generator and check are both identity-based, not text-based (C16):
+    /// `snapshot_with_overlapping_spellings` lets the same real directory
+    /// appear under two different `dir` spellings, and `identity_contains`
+    /// follows `dir_ident`/`ident` chains rather than `Path::starts_with`, so
+    /// this property can actually fail against C2's counterexample instead of
+    /// being vacuously true because every entry agreed on one spelling.
     #[test]
     fn order_safety(
-        entries in snapshot(),
+        entries in snapshot_with_overlapping_spellings(),
         p in support::policy_or_default(),
         oc in on_collision(),
         case in volume_case(),
     ) {
+        // Built from the pre-plan entries, which still carry `dir_ident`
+        // (`PlanItem` does not) -- `(dir, from)` is exactly `(entry.dir,
+        // entry.name)`, unique per entry by construction.
+        let dir_ident_of: HashMap<(PathBuf, OsString), DirIdent> = entries
+            .iter()
+            .map(|e| ((e.dir.clone(), e.name.clone()), e.dir_ident))
+            .collect();
+        let parent_of_identity: HashMap<DirIdent, DirIdent> = entries
+            .iter()
+            .filter(|e| e.kind == EntryKind::Dir)
+            .map(|e| ((e.ident.dev, e.ident.ino), e.dir_ident))
+            .collect();
+
         let Some(plan) = planned(&entries, &p, oc, case) else { return Ok(()) };
         for (i, earlier) in plan.items.iter().enumerate() {
-            // Only a rename can invalidate a path, and only a directory has
-            // anything inside it. An item that renames nothing cannot be "applied
-            // too early" -- and `.`/`..`, which the generator produces because
-            // they are corpus fixtures, are `Skipped` for exactly that reason.
+            // Only a rename can invalidate a directory's identity, and only a
+            // directory has anything inside it. An item that renames nothing
+            // cannot be "applied too early".
             if earlier.resolution != Resolution::Rename || earlier.kind != EntryKind::Dir {
                 continue;
             }
-            let container = path_of(&earlier.dir, &earlier.from);
+            let target = (earlier.ident.dev, earlier.ident.ino);
             for later in &plan.items[i + 1..] {
+                let Some(&later_dir_ident) =
+                    dir_ident_of.get(&(later.dir.clone(), later.from.clone()))
+                else {
+                    continue; // never happens for an entry that came from `entries`
+                };
                 prop_assert!(
-                    !later.dir.starts_with(&container),
-                    "{:?} is applied before {:?}, which lives inside it",
-                    container, path_of(&later.dir, &later.from)
+                    !identity_contains(&parent_of_identity, target, later_dir_ident),
+                    "{:?} -> {:?} is applied before {:?} -> {:?}, which lives inside it",
+                    earlier.from, earlier.to, later.from, later.to
                 );
             }
         }

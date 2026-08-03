@@ -98,9 +98,11 @@ pub struct Entry {
     pub dir_ident: DirIdent,
     /// Depth below the walk root, carried for the report.
     ///
-    /// Ordering does **not** trust this field: it is derived from `dir` instead,
-    /// so Order safety cannot be broken by a walker that miscounts. See
-    /// `deterministic_order`.
+    /// Ordering does **not** trust this field (C2): the walk resets it to 0 at
+    /// every `-r` argument's own root, so the same real directory reached by
+    /// two overlapping arguments can carry two different values here. Order
+    /// safety instead derives depth structurally, from `dir_ident`/`ident`
+    /// chains within the snapshot itself. See `structural_depth`.
     pub depth: u32,
 }
 
@@ -401,17 +403,25 @@ fn key_of_os(name: &OsStr, case: VolumeCase) -> Vec<u8> {
 
 /// Apply order: deepest first, ties by NFC bytes of the source name.
 ///
-/// Depth comes from `dir`'s component count rather than from `Entry::depth`.
-/// Both should agree, but only one of them cannot lie, and Order safety is a
-/// data-loss property: an entry inside a directory always has more path
-/// components than the directory's own entry, so component count is exactly the
-/// invariant the property needs.
+/// Depth is **structural**, not textual (C2): it comes from walking `dir_ident`
+/// chains through the snapshot's own directory entries, via
+/// [`structural_depth`], never from `dir`'s spelling. `dir.components().count()`
+/// was tried here first and is exactly the C2 defect -- two arguments naming one
+/// real directory (`"de ep/d ir"` and `"de ep/../de ep"`) give it two different
+/// component counts, so a parent could sort as shallower than its own contents
+/// and get renamed first. Neither can `Entry::depth` stand in for it unmodified:
+/// that field is the walk's *per-argument* depth (reset to 0 at every `-r`
+/// argument's own root), so the same real directory reached by two different
+/// arguments carries two different `depth` values too. `structural_depth`
+/// instead asks "which entries, if any, in *this* snapshot are this entry's real
+/// ancestors" via `(dev, ino)`, which cannot be defeated by how a path is typed.
 fn deterministic_order(entries: &[Entry]) -> Vec<usize> {
+    let depth = structural_depth(entries);
     let mut keys: Vec<SortKey<'_>> = entries
         .iter()
         .enumerate()
         .map(|(i, e)| SortKey {
-            depth: Reverse(e.dir.components().count()),
+            depth: Reverse(depth[i] as usize),
             dir: e.dir.as_path(),
             nfc: key_of_os(&e.name, VolumeCase::Sensitive),
             raw: e.name.as_encoded_bytes(),
@@ -420,6 +430,60 @@ fn deterministic_order(entries: &[Entry]) -> Vec<usize> {
         .collect();
     keys.sort_unstable();
     keys.into_iter().map(|k| k.index).collect()
+}
+
+/// For each entry, how many of *this snapshot's own directory entries*
+/// transitively contain it, walked through `dir_ident`/`ident` rather than
+/// `dir`'s text (C2).
+///
+/// An entry's containing directory, if that directory is itself in the
+/// snapshot, is whichever [`EntryKind::Dir`] entry's own identity
+/// (`ident.dev`, `ident.ino`) equals this entry's `dir_ident` -- the same
+/// identity a real filesystem would report for that directory however its
+/// path happens to be spelled. Depth is 1 plus that parent's depth, or 0 when
+/// no such entry exists (the walk root, or a lone top-level argument). Two
+/// unrelated subtrees never influence each other's depth, which is all Order
+/// safety needs: a parent must never sort as shallow as, or shallower than,
+/// something inside it, and nothing is asserted about entries that are not on
+/// the same containment chain.
+fn structural_depth(entries: &[Entry]) -> Vec<u32> {
+    // An `EntryKind::Dir` entry's own identity, as it would appear as some
+    // *other* entry's `dir_ident` if that other entry lives inside it.
+    let mut as_container: HashMap<DirIdent, usize> = HashMap::new();
+    for (i, e) in entries.iter().enumerate() {
+        if e.kind == EntryKind::Dir {
+            as_container.insert((e.ident.dev, e.ident.ino), i);
+        }
+    }
+
+    let mut depth = vec![None; entries.len()];
+    for i in 0..entries.len() {
+        resolve_depth(i, entries, &as_container, &mut depth);
+    }
+    depth.into_iter().map(Option::unwrap_or_default).collect()
+}
+
+/// Memoized single-entry resolution for [`structural_depth`], with a
+/// `visiting` guard against a cycle. A real filesystem's directory tree has
+/// none, but this walks caller-supplied `dir_ident`/`ident` pairs, not the
+/// filesystem itself, so nothing here may assume it.
+fn resolve_depth(
+    i: usize,
+    entries: &[Entry],
+    as_container: &HashMap<DirIdent, usize>,
+    depth: &mut [Option<u32>],
+) -> u32 {
+    if let Some(d) = depth[i] {
+        return d;
+    }
+    // Break a cycle by declaring it depth 0 before recursing further -- this
+    // value is provisional and gets overwritten below once the recursion that
+    // hit it unwinds, but it stops the recursion from looping forever.
+    depth[i] = Some(0);
+    let parent = as_container.get(&entries[i].dir_ident).filter(|&&p| p != i);
+    let d = parent.map_or(0, |&p| resolve_depth(p, entries, as_container, depth) + 1);
+    depth[i] = Some(d);
+    d
 }
 
 /// The total order `plan()` walks in. Derived `Ord` is lexicographic by field
@@ -948,14 +1012,24 @@ mod tests {
 
     /// Order safety, as a named case rather than only as a property: a dirty
     /// directory name and an entry inside it.
+    ///
+    /// `child.dir_ident` is set to `parent`'s own `ident` (C2): that is exactly
+    /// how a real walk links the two regardless of how `child.dir`'s text is
+    /// spelled, and it is what `deterministic_order` now keys on instead of
+    /// `child.depth` (left at its default -- ordering does not read it).
     #[test]
     fn a_parent_directory_is_renamed_after_its_contents() {
         let mut parent = entry("a b");
         parent.kind = EntryKind::Dir;
+        parent.ident = Ident {
+            dev: 1,
+            ino: 42,
+            nlink: 1,
+            mtime: SystemTime::UNIX_EPOCH,
+        };
         let mut child = entry("c d.txt");
         child.dir = dir().join("a b");
-        child.dir_ident = (1, 2); // a different directory than `dir()`
-        child.depth = 2;
+        child.dir_ident = (1, 42); // parent's identity, however "a b" is spelled
         let p = plan(
             &[parent, child],
             &Policy::default(),
