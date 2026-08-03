@@ -418,19 +418,32 @@ fn split_lines(bytes: &[u8]) -> Vec<&[u8]> {
 }
 
 /// True when `name` is usable as a single, ordinary path component: not empty,
-/// not `.` or `..`, and free of either flavour of path separator.
+/// not `.` or `..`, and free of whatever this platform's `rename`/`lstat`
+/// calls treat as a path separator.
 ///
-/// `Path::components()` only recognises the *host* platform's separator, so on
-/// Unix a name containing `\` still parses as one `Normal` component; checked
-/// for explicitly here, byte-wise, because a journal is portable text that can
-/// be replayed on a different platform than the one that wrote it (C1).
+/// `\` is checked only under `cfg!(windows)`, not unconditionally. A journal
+/// is portable text that *can* be replayed on a different platform than the
+/// one that wrote it (C1), but the escape this guards against is real only on
+/// the platform that will actually pass `from`/`to` to a rename syscall: on
+/// Windows `MoveFileExW` and friends treat `\` as a separator, so a `\`-laden
+/// name is a multi-component path in disguise there and must be refused. On
+/// Unix `renameat` never treats `\` specially -- `Path::components()` even
+/// parses it as one `Normal` component -- so a name containing it is exactly
+/// as ordinary as any other basename, and rejecting it on this platform
+/// serves no protective purpose while permanently orphaning any such file
+/// from `undo` (it was rename-able by `-x` in the first place; `classes.rs`
+/// only rewrites `\` in *sanitized* output names, never in the original
+/// `from`). Checking `cfg!(windows)` here, rather than the platform that
+/// wrote the record, is what keeps this in sync with the actual replay
+/// syscall: it is *this* process's rename call the escape would have to go
+/// through.
 fn is_plain_basename(name: &OsStr) -> bool {
     let bytes = name.as_encoded_bytes();
     !bytes.is_empty()
         && bytes != b"."
         && bytes != b".."
         && !bytes.contains(&b'/')
-        && !bytes.contains(&b'\\')
+        && (!cfg!(windows) || !bytes.contains(&b'\\'))
 }
 
 /// One `intent` record as an undoable item, or the reason it must be treated
@@ -821,6 +834,71 @@ mod tests {
         );
         assert!(inner.join("victim2.txt").exists(), "victim2.txt untouched");
         assert!(inner.join("victim3.txt").exists(), "victim3.txt untouched");
+    }
+
+    /// A name containing `\` is an ordinary basename on Unix -- `-x` renames
+    /// it like any other -- so the journal that recorded the rename must be
+    /// able to record and replay it too, or `undo` silently and permanently
+    /// loses the file. Before the fix, `is_plain_basename` rejected any `from`
+    /// containing `\` unconditionally (mistaking a byte that is only a
+    /// separator on Windows for one that is a separator everywhere), so
+    /// `replay` turned this record into an anomaly instead of an [`UndoItem`]
+    /// and the round trip below failed with 0 items replayed.
+    #[cfg(unix)]
+    #[test]
+    fn a_backslash_named_file_round_trips_through_undo() {
+        use crate::apply;
+        use crate::fsops::PlatformRenameOps;
+        use std::fs;
+        use std::os::unix::fs::MetadataExt as _;
+
+        let base = tempfile::tempdir().expect("tempdir");
+        let original = "back\\slash.txt";
+        let renamed = "back_slash.txt";
+        fs::write(base.path().join(original), b"payload").expect("write original");
+
+        // What `-x` itself would do: rename the backslash-named file, then
+        // record the intent. Order matches the journal's own write-then-act
+        // protocol closely enough for this test's purpose -- what matters
+        // here is that the record survives `replay`.
+        fs::rename(base.path().join(original), base.path().join(renamed)).expect("rename");
+        let meta = fs::metadata(base.path().join(renamed)).expect("stat renamed");
+
+        let records = [
+            json!({
+                "op": "intent", "dev": meta.dev(), "ino": meta.ino(), "kind": "file",
+                "mtime": 0, "dir": base.path().to_str().unwrap(),
+                "from": original, "to": renamed,
+            }),
+            json!({ "op": "done", "ino": meta.ino() }),
+            json!({ "op": "end" }),
+        ];
+        let mut text = String::new();
+        for r in &records {
+            text.push_str(&r.to_string());
+            text.push('\n');
+        }
+        let journal_path = base.path().join("j.jsonl");
+        fs::write(&journal_path, text).expect("write journal");
+
+        let replayed = replay(&journal_path).expect("a well-formed journal always reads");
+        assert_eq!(
+            replayed.items.len(),
+            1,
+            "a `\\` in `from` must not be treated as a path separator on Unix: {:?}",
+            replayed.anomalies
+        );
+
+        let mut journal = NullJournal;
+        let mut out = Vec::new();
+        let u = apply::undo(&replayed.items, &PlatformRenameOps, &mut journal, &mut out);
+
+        assert_eq!(u.renamed, 1, "{:?}", String::from_utf8_lossy(&out));
+        assert!(
+            base.path().join(original).exists(),
+            "undo must restore the original backslash-named file"
+        );
+        assert!(!base.path().join(renamed).exists());
     }
 
     /// C2. One invalid UTF-8 byte in the middle of an otherwise-good journal
