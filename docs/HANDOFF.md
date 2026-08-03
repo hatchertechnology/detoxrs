@@ -1,4 +1,4 @@
-# Handoff — state as of 2026-08-03 (M1 complete, self-review applied)
+# Handoff — state as of 2026-08-03 (M1 complete, six-reviewer adversarial pass applied)
 
 Written at the end of a long orchestration session, so a fresh session can resume without
 re-deriving anything. Read `docs/plans/unified-draft-plan.md` first; it is the spec being
@@ -101,14 +101,99 @@ only here:
   name is destroyed; the planner will not normally produce such an item anyway. Argued in
   `fsops/fallback.rs`.
 
-## Resume here: implementation review
+## The adversarial review, 2026-08-03
 
-M1's code is done and self-reviewed; nobody outside the session that wrote it has read it. The
-separate-team review and the opus adjudication of that review are the two remaining rows above.
-Points worth aiming a reviewer at, because they are where a defect would be expensive rather than
-merely wrong: the apply loop's step order in `apply.rs`, the `undo`-reuses-`apply` decision (it buys
-undo-of-undo for free, and it means a bug in `attempt` is a bug in both directions), and the batch-id
-ordering property that `--last` depends on.
+Six reviewers, each given one attack surface and a standing order to assume the code was broken and
+prove it. Read-only on the tree; anything needing a code change went in a copy. They found **seven
+real defects**, four of them behavioural. Every fix below landed with a test written first that
+reproduced the defect.
+
+**The worst one, and the most interesting: the directory was not pinned.** `apply` checked identity
+with `symlink_metadata(dir.join(from))` and then `fsops` re-resolved `dir` _by path_ down inside the
+rename. Rename the directory in that gap and the rename lands on a file that was never checked,
+while the journal records a **false success** against the original inode. Reproduced with
+content-tagged files. Fixed properly rather than narrowly: `RenameOps` now hands out a `Dir` — an
+open descriptor on Unix — and the identity check, the occupancy check and the rename all go through
+that one handle. A path resolved twice is two directories; a descriptor resolved once is one. Guarded
+by `the_rename_follows_the_pinned_directory_not_the_path`, which renames the pinned directory away
+mid-test and asserts the rename follows the inode rather than the path.
+
+**The flagship crash test did not test what it is named for.** Moving `journal.intent` to _after_ the
+rename — the exact inversion the whole design forbids — passed `crash_mid_batch_is_recoverable` 6
+runs out of 6. The cause is not timing: it is that every assertion in that test compares the journal
+against _itself_. With the rename first, each intent still has a `done` after it, `unresolved` is
+still 0, and the file renamed in the open window is simply absent from the journal, where nothing was
+looking. Measured: the window is hit in roughly a quarter of killed runs, so the state was reachable
+all along. Two fixes: a deterministic
+`the_intent_is_recorded_before_the_rename_not_after` that threads one event log through the journal
+double and the rename and asserts the interleaving (fails every time, in microseconds), and a new
+property in the crash test that compares the journal against the **filesystem** — every rename that
+happened must be journalled. Keep both and know what each is worth: the first is the gate, the second
+is a probabilistic end-to-end detector.
+
+**`replay` trusted the journal completely.** Outcome records carry the inode they close and it was
+never compared, so a `done` consumed whatever intent happened to be pending; a journal with two
+intents made one item vanish from both the undo set and the interrupted report, silently. A malformed
+intent did the same and left `undo` printing "nothing to undo" with exit 0. Now every mismatch,
+orphan and unparseable line lands in `Replay::anomalies`, is printed with its line number, and forces
+a non-zero exit. For the one file the safety story rests on, silence was the wrong failure mode.
+
+**`undo --last` depended on the wall clock.** Batches were named `<UTC-stamp>-<subsecond-hex>` and
+`--last` took the lexical maximum, so a backward NTP step — routine on a laptop that sleeps — makes
+the newer batch sort first and `undo --last` revert the wrong one. Ids are now
+`<seq>-<UTC-stamp>`, with the sequence read from the directory, so ordering holds by construction
+whatever the clock does. This **deleted** the nanosecond-derived suffix, which a mutation run had
+separately shown was untested. `last_means_most_recently_created` pins it.
+
+**`undo --last` could revert a batch that was still being written.** Reproduced: a running `-x` gets
+its completed prefix reverted, the forward run carries on past those items, and the tree is left
+permanently half-cleaned with exit 0. A batch now writes a terminal `end` record, and undoing a batch
+without one warns explicitly and exits 1 — which still permits the crash-recovery path, because a
+crashed batch has no `end` either and must remain undoable. Note for the spec: §5.8 analyses two
+concurrent `-x` runs but never names `-x` racing `undo`; that gap is real and worth an amendment.
+
+Two documentation defects: §5.5 says undo runs through the collision engine and it does not (declared
+now in `apply.rs`, with the argument for why refusing beats renumbering when restoring), and
+`Replay::items`'s comment had the undo ordering backwards.
+
+### What the reviewers could not break, which is the other half of the result
+
+Reported because a review that only lists findings is not auditable. The fsync-before-rename ordering
+survived a real instrumented `kill -9` on the first item and mid-batch. 150 iterations of two
+concurrent `-x` runs over one tree — ~6000 attempted renames — lost, duplicated and clobbered nothing,
+producing exactly the "confusing report" §5.8 predicts. 30 simultaneous batches produced 30 distinct
+journals. Two simultaneous `undo`s of one batch split the items cleanly. Directory-onto-directory and
+file-onto-directory collisions renumber rather than merge. `ident_at` does not follow symlinks, and it
+agrees with `walk`'s `std` reading of the same two numbers — now asserted, since the two come from
+different APIs over fields that are signed on some targets. Of nine planted mutations, six were caught
+directly, including a clobbering rename, a neutered `aborts_batch`, and skipped batch-id validation.
+
+### Reviewer quality, recorded because it matters for the next pass
+
+Two of the six returned confident all-clear verdicts that did not survive spot-checking. One cited a
+hardlink test in a file containing no hardlink test, and marked the collision-engine requirement
+CONFORMS while citing the very function that proves it does not. The other reported "188 cases, 0
+issues" and credited `serde_json` for escaping that the hand-rolled `report::escape` actually does.
+Both all-clears were discarded; the one real finding recovered from them came from checking a claim
+that was inverted. **Weight a reviewer by its reproductions, not its verdict** — the four that
+instrumented code, hand-authored hostile inputs, or planted mutations found everything of value.
+
+### Still open
+
+- The fsync no-op survives the whole suite, and that is honest rather than fixable: `kill -9` does not
+  discard page cache, so only real power loss would tell the difference. The ceiling and its upgrade
+  path are named in `journal.rs`.
+- The demoted `check_then_rename` TOCTOU remains theoretical here: no available filesystem refuses
+  `RENAME_NOREPLACE`/`RENAME_EXCL`, so that rung cannot be exercised on this hardware. Unchanged from
+  the spec's own admission.
+- `volume_case`'s probe has a benign race (a wrong case guess can only misreport a collision, never
+  cause a wrong rename, since the apply-time recheck and the kernel act independently of it).
+
+## Resume here: opus adjudication
+
+The review is done and its findings are applied. What has not happened is an independent read of
+_these_ fixes — the dirfd refactor changed the `RenameOps` trait shape and touched every call site,
+and it was written by the same author the review was auditing.
 
 ## Closed: `-r` semantics
 

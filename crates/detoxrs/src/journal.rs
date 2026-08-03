@@ -1,7 +1,7 @@
 //! The undo journal (proposal §5.5, §5.8; plan §7.3).
 //!
 //! Append-only JSONL, one file per batch, at
-//! `$XDG_STATE_HOME/detoxrs/journal/<UTC-timestamp>-<id>.jsonl`, falling back to
+//! `$XDG_STATE_HOME/detoxrs/journal/<seq>-<UTC-timestamp>.jsonl`, falling back to
 //! `$HOME/.local/state/...`. XDG names state as the home for "actions history".
 //! Not `os.TempDir()` keyed by a hash of the working directory, which is what f2
 //! does and which does not survive a reboot.
@@ -45,7 +45,7 @@ use detoxrs_core::policy::Policy;
 use serde_json::{Value, json};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead as _, BufReader, Write as _};
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -91,32 +91,62 @@ impl Journal {
     pub fn create(policy: &Policy, cwd: &Path) -> io::Result<Self> {
         let dir = journal_dir()?;
         fs::create_dir_all(&dir)?;
-        let now = SystemTime::now();
-        let stamp = utc_stamp(now);
+        let stamp = utc_stamp(SystemTime::now());
 
-        // `create_new` so two runs starting in the same instant cannot share a
-        // file. The id is derived rather than random -- there is no `rand` in the
-        // budget -- so a collision is possible and is resolved by trying again
-        // rather than by hoping.
+        // `create_new` so two runs starting at once cannot share a file, and the
+        // sequence number so the retry lands on a *later*-sorting name.
+        let mut seq = Self::next_seq(&dir)?;
         let mut last = None;
-        for attempt in 0..16_u32 {
-            let id = batch_suffix(now, attempt);
-            let path = dir.join(format!("{stamp}-{id}.jsonl"));
+        for _ in 0..64_u32 {
+            let id = format!("{seq:06}-{stamp}");
+            let path = dir.join(format!("{id}.jsonl"));
             match OpenOptions::new().create_new(true).append(true).open(&path) {
                 Ok(file) => {
-                    let mut j = Self {
-                        file,
-                        path,
-                        id: format!("{stamp}-{id}"),
-                    };
+                    let mut j = Self { file, path, id };
                     j.header(policy, cwd)?;
                     return Ok(j);
                 }
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = Some(e),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                    last = Some(e);
+                    seq += 1;
+                }
                 Err(e) => return Err(e),
             }
         }
         Err(last.unwrap_or_else(|| io::Error::other("cannot name a journal file")))
+    }
+
+    /// One past the highest sequence number already in the journal directory.
+    ///
+    /// **This is what makes `undo --last` correct**, and it is not a cosmetic
+    /// choice. An earlier version named batches `<UTC-stamp>-<subsecond-hex>` and
+    /// relied on that sorting in creation order; an adversarial review pointed out
+    /// that `SystemTime::now()` is not monotonic, so a backward NTP step between two
+    /// runs makes the later batch sort *first* and `undo --last` revert the wrong
+    /// one. A counter read from the directory cannot do that, whatever the clock
+    /// does. The timestamp stays in the name because it is what makes the directory
+    /// readable by a human, but nothing depends on it for ordering any more.
+    ///
+    /// A gap in the sequence (someone deleted an old journal) is harmless: only the
+    /// maximum matters. Fixed width so a lexical sort is a numeric sort.
+    fn next_seq(dir: &Path) -> io::Result<u64> {
+        let mut max = 0;
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(1),
+            Err(e) => return Err(e),
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let name = entry.file_name();
+            if let Some(seq) = name
+                .to_str()
+                .and_then(|n| n.split('-').next())
+                .and_then(|p| p.parse::<u64>().ok())
+            {
+                max = max.max(seq);
+            }
+        }
+        Ok(max + 1)
     }
 
     /// This batch's id, which is also its file's stem: what `undo <BATCH-ID>` takes.
@@ -129,6 +159,23 @@ impl Journal {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Close the batch: a terminal record saying it ran to completion.
+    ///
+    /// Its *absence* is the information that matters. A journal with no `end`
+    /// either belongs to a run that died or to one that is still going, and
+    /// `undo` must say so instead of silently reverting a prefix of a batch that
+    /// is still being written -- an adversarial review reproduced exactly that,
+    /// leaving a permanently half-cleaned tree and exit 0.
+    ///
+    /// # Errors
+    ///
+    /// Any write or fsync failure. A batch that renamed successfully but could
+    /// not be closed is reported, not silently downgraded.
+    pub fn finish(&mut self) -> io::Result<()> {
+        self.write_line(&json!({ "op": "end" }))?;
+        self.file.sync_data()
     }
 
     fn header(&mut self, policy: &Policy, cwd: &Path) -> io::Result<()> {
@@ -235,51 +282,106 @@ impl UndoItem {
 #[derive(Debug, Default)]
 pub struct Replay {
     /// The completed renames, **in the order `undo` must apply them**: reverse of
-    /// the forward run, so a directory is put back after the entries inside it.
+    /// the forward run. The forward run goes deepest-first, so reversing puts a
+    /// directory back *before* the entries inside it, which is what makes each
+    /// item's recorded `dir` resolve again by the time its turn comes.
     pub items: Vec<UndoItem>,
     /// The item whose outcome is unknown: an `intent` with neither `done` nor
-    /// `failed` after it. At most one can exist, because the forward loop writes
-    /// the outcome of item N before the intent of item N+1. This is the "exact
-    /// interrupted item" the crash protocol promises.
+    /// `failed` after it. At most one *can* exist in a journal a clean run wrote,
+    /// because the forward loop records the outcome of item N before the intent of
+    /// item N+1. That is now checked rather than trusted -- see `anomalies`.
     pub interrupted: Option<UndoItem>,
+    /// Did the batch record that it finished? `false` means it crashed or is still
+    /// running, and the caller must say so.
+    pub complete: bool,
+    /// Everything about this journal that does not add up.
+    ///
+    /// This field exists because an adversarial review fed `replay` a journal with
+    /// two intents and one `done`, and one item vanished from the undo set with no
+    /// error at all: outcomes used to close whatever intent happened to be pending
+    /// without checking that they named the same inode. For the one file the whole
+    /// safety story rests on, silence was the wrong failure mode.
+    pub anomalies: Vec<String>,
 }
 
 /// Read a batch journal.
 ///
-/// Malformed or unrecognised lines are ignored rather than fatal: this file is
-/// append-only and a crash can truncate its last line mid-write, and refusing to
-/// undo a batch because its final byte is missing would defeat the purpose.
+/// A truncated final line is expected rather than exceptional -- this file is
+/// append-only and a crash can cut it mid-write -- so it is ignored. Anything else
+/// that does not add up goes in [`Replay::anomalies`] and is reported to the user.
 ///
 /// # Errors
 ///
 /// Any failure to open or read the file.
 pub fn replay(path: &Path) -> io::Result<Replay> {
     let mut out = Replay::default();
-    let mut pending: Option<UndoItem> = None;
+    let mut pending: Option<(u64, UndoItem)> = None;
+    let text = fs::read_to_string(path)?;
+    let lines: Vec<&str> = text.lines().collect();
 
-    for line in BufReader::new(File::open(path)?).lines() {
-        let Ok(line) = line else { break };
-        let Ok(rec) = serde_json::from_str::<Value>(&line) else {
+    for (n, line) in lines.iter().enumerate() {
+        let Ok(rec) = serde_json::from_str::<Value>(line) else {
+            // Only the last line can legitimately be half-written.
+            if n + 1 < lines.len() {
+                out.anomalies
+                    .push(format!("line {} is not valid JSON and was ignored", n + 1));
+            }
             continue;
         };
         match rec.get("op").and_then(Value::as_str) {
-            Some("intent") => pending = parse_intent(&rec),
-            Some("done") => {
-                if let Some(item) = pending.take() {
-                    out.items.push(item);
+            Some("intent") => {
+                if let Some((ino, item)) = pending.take() {
+                    out.anomalies.push(format!(
+                        "line {}: a new intent starts while {} (inode {ino}) has no recorded \
+                         outcome; that item cannot be undone and must be checked by hand",
+                        n + 1,
+                        item.original.to_string_lossy()
+                    ));
+                }
+                match parse_intent(&rec) {
+                    Some(item) => pending = Some((item.ident.ino, item)),
+                    None => out.anomalies.push(format!(
+                        "line {} is an intent record missing a field it needs; the item it \
+                         describes cannot be undone",
+                        n + 1
+                    )),
                 }
             }
-            Some("failed") => pending = None,
+            Some(op @ ("done" | "failed")) => {
+                let claimed = rec.get("ino").and_then(Value::as_u64);
+                match pending.take() {
+                    // The outcome must name the intent it closes. Positional
+                    // trust is what let an item disappear silently.
+                    Some((ino, item)) if claimed == Some(ino) => {
+                        if op == "done" {
+                            out.items.push(item);
+                        }
+                    }
+                    Some((ino, item)) => {
+                        out.anomalies.push(format!(
+                            "line {}: a '{op}' for inode {} closes an intent for inode {ino} \
+                             ({}); neither is trusted and neither will be undone",
+                            n + 1,
+                            claimed.map_or_else(|| "?".to_owned(), |i| i.to_string()),
+                            item.original.to_string_lossy()
+                        ));
+                    }
+                    None => out
+                        .anomalies
+                        .push(format!("line {}: a '{op}' with no intent before it", n + 1)),
+                }
+            }
+            Some("end") => out.complete = true,
             _ => {}
         }
     }
-    out.interrupted = pending;
-    // Deepest-last on the way in becomes deepest-first on the way back: undoing
-    // in reverse means an entry is restored before the directory containing it is.
+    out.interrupted = pending.map(|(_, item)| item);
     out.items.reverse();
     Ok(out)
 }
 
+/// One `intent` record as an undoable item, or `None` if it is missing a field it
+/// needs. The caller records that as an anomaly rather than skipping it quietly.
 fn parse_intent(rec: &Value) -> Option<UndoItem> {
     Some(UndoItem {
         dir: PathBuf::from(get_os(rec, "dir")?),
@@ -448,25 +550,6 @@ fn get_os(rec: &Value, key: &str) -> Option<OsString> {
     }
     #[cfg(not(unix))]
     None
-}
-
-/// A batch id suffix: four hex digits, and they must **sort in creation order**.
-///
-/// `undo --last` means the most recent batch, and the only thing it has to go on
-/// is the filename. An earlier version mixed the pid into this suffix, which made
-/// two batches created in the same second sort by a hash — so undoing an undo
-/// reverted the *original* batch instead. The suffix is therefore the subsecond
-/// part of the clock, scaled to fit four digits, which is monotonic within a
-/// second; four fixed-width lowercase hex digits sort lexicographically the same
-/// way they compare numerically, so `list()` can sort by name.
-///
-/// `attempt` breaks a tie between two runs inside the same 1/15259th of a second,
-/// which is what `create_new` detects and this resolves.
-fn batch_suffix(now: SystemTime, attempt: u32) -> String {
-    let nanos = now
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.subsec_nanos());
-    format!("{:04x}", ((nanos >> 16) + attempt) & 0xffff)
 }
 
 /// `YYYYMMDDTHHMMSSZ`, UTC.

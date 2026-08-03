@@ -121,6 +121,15 @@ fn exec(p: &Plan, policy: &Policy, as_json: bool, quiet: bool) -> Result<u8, Str
         apply::run(&p.items, &PlatformRenameOps, &mut j, &mut out)
     };
 
+    // Close the journal before reporting: the terminal record is what tells a
+    // later `undo` that this batch is not still running.
+    if let Err(e) = j.finish() {
+        eprintln!(
+            "detoxrs: warning: could not close the undo journal ({e}); `undo` will treat this \
+             batch as unfinished."
+        );
+    }
+
     if as_json {
         report::json(&mut out, p, Some(&s.outcomes))
     } else if quiet {
@@ -186,6 +195,12 @@ fn undo(u: &cli::Undo) -> Result<u8, String> {
 
     let replay =
         journal::replay(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+
+    // A journal that does not add up is reported in full and never silently worked
+    // around: it is the only record of what happened.
+    for a in &replay.anomalies {
+        eprintln!("detoxrs: journal problem: {a}");
+    }
     if let Some(item) = &replay.interrupted {
         // The crash protocol's whole promise, discharged in one line.
         eprintln!(
@@ -195,9 +210,21 @@ fn undo(u: &cli::Undo) -> Result<u8, String> {
             report::escape(&item.current)
         );
     }
+    if !replay.complete {
+        eprintln!(
+            "detoxrs: warning: batch {} has no completion record, so it either crashed or is \
+             still running. If a detoxrs run is still in progress, its remaining items will not \
+             be reverted and the tree will be left half-cleaned.",
+            path.file_stem().unwrap_or_default().to_string_lossy()
+        );
+    }
+    // Anything unexplained about the journal makes this a non-zero exit even when
+    // every rename it did describe was reverted cleanly.
+    let suspect = !replay.complete || replay.interrupted.is_some() || !replay.anomalies.is_empty();
+
     if replay.items.is_empty() {
         println!("nothing to undo in that batch.");
-        return Ok(u8::from(replay.interrupted.is_some()));
+        return Ok(u8::from(suspect));
     }
 
     // An undo is itself a batch of renames, so it gets its own journal and can
@@ -209,6 +236,9 @@ fn undo(u: &cli::Undo) -> Result<u8, String> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
     let s = apply::undo(&replay.items, &PlatformRenameOps, &mut j, &mut out);
+    if let Err(e) = j.finish() {
+        eprintln!("detoxrs: warning: could not close the undo journal ({e}).");
+    }
     drop(writeln!(
         out,
         "\n{} reverted, {} refused. This undo is itself batch {}.",
@@ -217,11 +247,7 @@ fn undo(u: &cli::Undo) -> Result<u8, String> {
         j.id()
     ));
     drop(out.flush());
-    Ok(if replay.interrupted.is_some() {
-        1
-    } else {
-        s.exit_code()
-    })
+    Ok(if suspect { 1 } else { s.exit_code() })
 }
 
 /// A plan error as the user should read it.

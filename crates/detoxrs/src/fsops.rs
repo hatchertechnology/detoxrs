@@ -13,6 +13,17 @@
 //! narrow *observed-error* fallback, in [`fallback`], for a filesystem nobody
 //! has measured yet. See §5.4 and doc 06 row 4f.
 //!
+//! **The directory is pinned, and that is a safety property rather than an
+//! optimisation.** [`RenameOps::open`] returns a [`Dir`] -- an open directory file
+//! descriptor on Unix -- and the identity check, the occupancy check and the
+//! rename all go through that one handle. An earlier version resolved `dir` by
+//! path a second time, inside the rename, *after* the checks had already passed;
+//! an adversarial review reproduced the consequence, which is that renaming a
+//! directory out from under a run in that gap made the rename land on a file that
+//! was never checked, while the journal recorded a false success against the
+//! original inode. A path resolved twice is two different directories in the
+//! general case. A descriptor resolved once is one directory, permanently.
+//!
 //! The trait exists for one reason beyond documentation: it is the fault
 //! injection point. §8.4's "`RENAME_NOREPLACE` unsupported" row needs a rename
 //! that returns [`RenameErr::Unsupported`] on demand, and no filesystem
@@ -20,6 +31,7 @@
 
 pub mod fallback;
 
+use detoxrs_core::plan::Ident;
 use std::ffi::OsStr;
 use std::fmt;
 use std::path::Path;
@@ -81,17 +93,51 @@ impl RenameErr {
     }
 }
 
+/// A directory, pinned for the duration of one item's checks and rename.
+///
+/// On Unix this is an open descriptor, which is what makes the pin real: the
+/// kernel resolves it to the same inode no matter what happens to the path that
+/// opened it. On other platforms it degrades to the path, and the identity
+/// guarantee degrades with it -- stated rather than hidden, because Windows is a
+/// best-effort tier (owner decision, 2026-07-31).
+pub struct Dir {
+    #[cfg(unix)]
+    fd: rustix::fd::OwnedFd,
+    #[cfg(not(unix))]
+    path: std::path::PathBuf,
+}
+
 /// Rename within one directory, never across directories (§5.2), never
 /// clobbering (§5.4).
+///
+/// Every method takes the same [`Dir`], so a caller cannot accidentally check one
+/// directory and rename in another. That is the whole reason the handle is in the
+/// signature instead of a `&Path`.
 pub trait RenameOps {
-    /// Rename `from` to `to` inside `dir`.
+    /// Pin `dir` so that everything else in this item happens inside it.
+    ///
+    /// # Errors
+    ///
+    /// Any [`RenameErr`] from opening the directory.
+    fn open(&self, dir: &Path) -> Result<Dir, RenameErr>;
+
+    /// `lstat` `name` relative to the pinned directory. Never follows a symlink:
+    /// what gets renamed is a directory entry, so the entry is what is inspected.
+    ///
+    /// # Errors
+    ///
+    /// [`RenameErr::NotFound`] if there is no such entry, or any other
+    /// [`RenameErr`].
+    fn ident_at(&self, dir: &Dir, name: &OsStr) -> Result<Ident, RenameErr>;
+
+    /// Rename `from` to `to` inside the pinned directory.
     ///
     /// # Errors
     ///
     /// Any [`RenameErr`]. Notably [`RenameErr::AlreadyExists`] rather than a
     /// silent overwrite: this call fails instead of destroying a file, on every
     /// platform and every filesystem, including the demoted path.
-    fn rename_noreplace(&self, dir: &Path, from: &OsStr, to: &OsStr) -> Result<(), RenameErr>;
+    fn rename_noreplace(&self, dir: &Dir, from: &OsStr, to: &OsStr) -> Result<(), RenameErr>;
 }
 
 /// The real thing.
@@ -99,22 +145,52 @@ pub struct PlatformRenameOps;
 
 impl RenameOps for PlatformRenameOps {
     #[cfg(unix)]
-    fn rename_noreplace(&self, dir: &Path, from: &OsStr, to: &OsStr) -> Result<(), RenameErr> {
+    fn open(&self, dir: &Path) -> Result<Dir, RenameErr> {
+        Ok(Dir {
+            fd: unix::open_dir(dir)?,
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn open(&self, dir: &Path) -> Result<Dir, RenameErr> {
+        // Best-effort tier: no pin, so the checks and the rename can in principle
+        // see different directories. Recorded in `Dir`'s own docs.
+        Ok(Dir {
+            path: if dir.as_os_str().is_empty() {
+                std::path::PathBuf::from(".")
+            } else {
+                dir.to_path_buf()
+            },
+        })
+    }
+
+    #[cfg(unix)]
+    fn ident_at(&self, dir: &Dir, name: &OsStr) -> Result<Ident, RenameErr> {
+        unix::ident_at(&dir.fd, name)
+    }
+
+    #[cfg(not(unix))]
+    fn ident_at(&self, dir: &Dir, name: &OsStr) -> Result<Ident, RenameErr> {
+        fallback::ident_at_path(&dir.path, name)
+    }
+
+    #[cfg(unix)]
+    fn rename_noreplace(&self, dir: &Dir, from: &OsStr, to: &OsStr) -> Result<(), RenameErr> {
         // Already demoted by an earlier item on this run, so do not pay for a
         // call that is known to fail here.
         if fallback::is_demoted() {
-            return fallback::check_then_rename(dir, from, to);
+            return fallback::check_then_rename(self, dir, from, to);
         }
-        match unix::renameat_noreplace(dir, from, to) {
+        match unix::renameat_noreplace(&dir.fd, from, to) {
             Ok(()) => Ok(()),
             // §5.4's two observed-error rungs, in order of specificity.
-            Err(RenameErr::AlreadyExists) if fallback::same_inode(dir, from, to) => {
-                fallback::warn_same_inode_once(dir);
-                unix::renameat_plain(dir, from, to)
+            Err(RenameErr::AlreadyExists) if fallback::same_inode(self, dir, from, to) => {
+                fallback::warn_same_inode_once();
+                unix::renameat_plain(&dir.fd, from, to)
             }
             Err(RenameErr::Unsupported) => {
-                fallback::demote(dir);
-                fallback::check_then_rename(dir, from, to)
+                fallback::demote();
+                fallback::check_then_rename(self, dir, from, to)
             }
             Err(e) => Err(e),
         }
@@ -127,8 +203,8 @@ impl RenameOps for PlatformRenameOps {
     /// documented-TOCTOU path that already exists, reported as
     /// `"atomicity": "check-then-rename"` rather than claimed as atomic.
     #[cfg(not(unix))]
-    fn rename_noreplace(&self, dir: &Path, from: &OsStr, to: &OsStr) -> Result<(), RenameErr> {
-        fallback::check_then_rename(dir, from, to)
+    fn rename_noreplace(&self, dir: &Dir, from: &OsStr, to: &OsStr) -> Result<(), RenameErr> {
+        fallback::check_then_rename(self, dir, from, to)
     }
 }
 
@@ -145,33 +221,69 @@ pub fn atomicity() -> &'static str {
 #[cfg(unix)]
 mod unix {
     use super::RenameErr;
-    use rustix::fs::{Mode, OFlags, RenameFlags};
+    use detoxrs_core::plan::Ident;
+    use rustix::fd::{AsFd, OwnedFd};
+    use rustix::fs::{AtFlags, Mode, OFlags, RenameFlags};
     use rustix::io::Errno;
     use std::ffi::OsStr;
     use std::path::Path;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     /// `renameat2(RENAME_NOREPLACE)` on Linux, `renameatx_np(RENAME_EXCL)` on
     /// Apple. One safe call, no `#[cfg]` split here, no `unsafe`.
-    pub fn renameat_noreplace(dir: &Path, from: &OsStr, to: &OsStr) -> Result<(), RenameErr> {
-        let fd = open_dir(dir)?;
-        rustix::fs::renameat_with(&fd, from, &fd, to, RenameFlags::NOREPLACE).map_err(map_errno)
+    pub fn renameat_noreplace(fd: &OwnedFd, from: &OsStr, to: &OsStr) -> Result<(), RenameErr> {
+        rustix::fs::renameat_with(fd.as_fd(), from, fd.as_fd(), to, RenameFlags::NOREPLACE)
+            .map_err(map_errno)
     }
 
     /// Plain `renameat(2)`, reached only from the same-inode rung in §5.4. It
     /// can clobber in general, which is why nothing else calls it: the caller
     /// has already established that `to` *is* `from`.
-    pub fn renameat_plain(dir: &Path, from: &OsStr, to: &OsStr) -> Result<(), RenameErr> {
-        let fd = open_dir(dir)?;
-        rustix::fs::renameat(&fd, from, &fd, to).map_err(map_errno)
+    pub fn renameat_plain(fd: &OwnedFd, from: &OsStr, to: &OsStr) -> Result<(), RenameErr> {
+        rustix::fs::renameat(fd.as_fd(), from, fd.as_fd(), to).map_err(map_errno)
     }
 
-    /// A directory handle for the rename.
+    /// `fstatat(AT_SYMLINK_NOFOLLOW)`: the identity of a name *inside the pinned
+    /// directory*, immune to anything happening to the path that opened it.
+    pub fn ident_at(fd: &OwnedFd, name: &OsStr) -> Result<Ident, RenameErr> {
+        let st =
+            rustix::fs::statat(fd.as_fd(), name, AtFlags::SYMLINK_NOFOLLOW).map_err(map_errno)?;
+        Ok(Ident {
+            // `as` rather than `try_from`: these fields are signed on some
+            // targets and unsigned on others, and the comparison only has to
+            // agree with `walk`'s own reading of the same two numbers, which
+            // `ident_matches_std_metadata` pins.
+            #[allow(clippy::cast_sign_loss, clippy::unnecessary_cast)]
+            dev: st.st_dev as u64,
+            #[allow(clippy::cast_sign_loss, clippy::unnecessary_cast)]
+            ino: st.st_ino as u64,
+            // `From` rather than `as`: this field is `u16` on Apple and `u64` on
+            // Linux, and both convert infallibly.
+            nlink: u64::from(st.st_nlink),
+            mtime: mtime_of(&st),
+        })
+    }
+
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        clippy::unnecessary_cast,
+        reason = "the seconds field is signed on some targets; a pre-epoch mtime is \
+                  clamped to the epoch rather than wrapping, and mtime is not used \
+                  by any identity comparison anyway"
+    )]
+    fn mtime_of(st: &rustix::fs::Stat) -> SystemTime {
+        let secs = st.st_mtime as i64;
+        u64::try_from(secs).map_or(UNIX_EPOCH, |s| UNIX_EPOCH + Duration::from_secs(s))
+    }
+
+    /// A directory handle for the checks and the rename.
     ///
-    /// ponytail: one `open` per rename. Items arrive grouped by directory, so
-    /// caching the last `(dir, fd)` pair would remove most of these calls; the
-    /// upgrade is a two-field struct at this call site and is worth doing when a
-    /// 200k-entry batch measures it, not before.
-    fn open_dir(dir: &Path) -> Result<rustix::fd::OwnedFd, RenameErr> {
+    /// `O_DIRECTORY` means a symlink-to-a-directory cannot be opened as one here,
+    /// and `O_NOFOLLOW` is deliberately *not* set: the walk already refuses to
+    /// descend through a symlinked directory, and a user who names one on the
+    /// command line is pointing at its target on purpose.
+    pub fn open_dir(dir: &Path) -> Result<OwnedFd, RenameErr> {
         // An empty parent means the current directory: `detoxrs file.txt` puts
         // `""` in `PlanItem::dir`, and `open("")` is `ENOENT`.
         let path = if dir.as_os_str().is_empty() {
@@ -210,9 +322,14 @@ mod unix {
 
 #[cfg(test)]
 mod tests {
-    use super::{PlatformRenameOps, RenameErr, RenameOps as _};
+    use super::{Dir, PlatformRenameOps, RenameErr, RenameOps as _};
     use std::ffi::OsStr;
     use std::fs;
+    use std::path::Path;
+
+    fn pin(p: &Path) -> Dir {
+        PlatformRenameOps.open(p).expect("open the directory")
+    }
 
     /// The whole point of the module, on whatever filesystem the tests run on:
     /// an occupied destination is refused, and the occupant is left alone.
@@ -223,7 +340,7 @@ mod tests {
         fs::write(t.path().join("b"), b"bbb").expect("write");
 
         let err = PlatformRenameOps
-            .rename_noreplace(t.path(), OsStr::new("a"), OsStr::new("b"))
+            .rename_noreplace(&pin(t.path()), OsStr::new("a"), OsStr::new("b"))
             .expect_err("must not clobber");
         assert_eq!(err, RenameErr::AlreadyExists);
         assert_eq!(fs::read(t.path().join("b")).expect("read"), b"bbb");
@@ -236,7 +353,7 @@ mod tests {
         fs::write(t.path().join("a"), b"aaa").expect("write");
 
         PlatformRenameOps
-            .rename_noreplace(t.path(), OsStr::new("a"), OsStr::new("c"))
+            .rename_noreplace(&pin(t.path()), OsStr::new("a"), OsStr::new("c"))
             .expect("free destination");
         assert_eq!(fs::read(t.path().join("c")).expect("read"), b"aaa");
         assert!(!t.path().join("a").exists());
@@ -251,7 +368,11 @@ mod tests {
         let t = tempfile::tempdir().expect("tempdir");
         fs::write(t.path().join("Case.txt"), b"x").expect("write");
         PlatformRenameOps
-            .rename_noreplace(t.path(), OsStr::new("Case.txt"), OsStr::new("case.txt"))
+            .rename_noreplace(
+                &pin(t.path()),
+                OsStr::new("Case.txt"),
+                OsStr::new("case.txt"),
+            )
             .expect("a case-only respell is one syscall, not a collision");
         assert_eq!(fs::read(t.path().join("case.txt")).expect("read"), b"x");
     }
@@ -260,8 +381,93 @@ mod tests {
     fn a_vanished_source_is_not_found() {
         let t = tempfile::tempdir().expect("tempdir");
         let err = PlatformRenameOps
-            .rename_noreplace(t.path(), OsStr::new("gone"), OsStr::new("also-gone"))
+            .rename_noreplace(&pin(t.path()), OsStr::new("gone"), OsStr::new("also-gone"))
             .expect_err("nothing to rename");
         assert_eq!(err, RenameErr::NotFound);
+    }
+
+    /// `ident_at` and `walk`'s `symlink_metadata` must read the same two numbers,
+    /// because `apply` compares one against the other. They come from different
+    /// APIs -- `fstatat` through `rustix` versus `std` -- and the underlying fields
+    /// are signed on some targets, so agreement is asserted rather than assumed.
+    #[cfg(unix)]
+    #[test]
+    fn ident_matches_std_metadata() {
+        use std::os::unix::fs::MetadataExt as _;
+        let t = tempfile::tempdir().expect("tempdir");
+        fs::write(t.path().join("a"), b"aaa").expect("write");
+        fs::create_dir(t.path().join("d")).expect("mkdir");
+        std::os::unix::fs::symlink("a", t.path().join("l")).expect("symlink");
+
+        let d = pin(t.path());
+        for name in ["a", "d", "l"] {
+            let mine = PlatformRenameOps
+                .ident_at(&d, OsStr::new(name))
+                .expect("ident_at");
+            let theirs = fs::symlink_metadata(t.path().join(name)).expect("lstat");
+            assert_eq!(mine.dev, theirs.dev(), "dev disagrees for {name}");
+            assert_eq!(mine.ino, theirs.ino(), "ino disagrees for {name}");
+            assert_eq!(mine.nlink, theirs.nlink(), "nlink disagrees for {name}");
+        }
+    }
+
+    /// `ident_at` must not follow a symlink: what gets renamed is the link's own
+    /// directory entry, so the link is what has to be identified.
+    #[cfg(unix)]
+    #[test]
+    fn ident_at_does_not_follow_a_symlink() {
+        let t = tempfile::tempdir().expect("tempdir");
+        fs::write(t.path().join("target"), b"x").expect("write");
+        std::os::unix::fs::symlink("target", t.path().join("link")).expect("symlink");
+
+        let d = pin(t.path());
+        let link = PlatformRenameOps
+            .ident_at(&d, OsStr::new("link"))
+            .expect("link");
+        let target = PlatformRenameOps
+            .ident_at(&d, OsStr::new("target"))
+            .expect("target");
+        assert_ne!(link.ino, target.ino, "ident_at followed the link");
+    }
+
+    /// **The pin, asserted directly.** This is the property an adversarial review
+    /// found missing: the checks and the rename must refer to the same directory
+    /// even if the *path* that named it stops pointing there. Renaming the
+    /// directory away and dropping a different one in its place must not redirect
+    /// the rename -- it lands in the directory that was opened, by inode.
+    #[cfg(unix)]
+    #[test]
+    fn the_rename_follows_the_pinned_directory_not_the_path() {
+        let t = tempfile::tempdir().expect("tempdir");
+        let real = t.path().join("real");
+        fs::create_dir(&real).expect("mkdir");
+        fs::write(real.join("a b.txt"), b"REAL").expect("write");
+
+        // Pin it, exactly as `apply` does, before anything moves.
+        let d = pin(&real);
+
+        // Now the swap: the directory we pinned is renamed away, and an impostor
+        // takes the original path with a file of the same name.
+        fs::rename(&real, t.path().join("moved")).expect("rename dir");
+        fs::create_dir(&real).expect("mkdir impostor");
+        fs::write(real.join("a b.txt"), b"IMPOSTOR").expect("write");
+
+        PlatformRenameOps
+            .rename_noreplace(&d, OsStr::new("a b.txt"), OsStr::new("a_b.txt"))
+            .expect("rename through the pinned handle");
+
+        // The rename landed in the pinned (now relocated) directory...
+        assert_eq!(
+            fs::read(t.path().join("moved/a_b.txt")).expect("read"),
+            b"REAL",
+            "the rename did not follow the directory it was checked against"
+        );
+        // ...and the impostor at the original path was never touched.
+        assert_eq!(
+            fs::read(real.join("a b.txt")).expect("read"),
+            b"IMPOSTOR",
+            "a file that was never checked was renamed"
+        );
+        assert!(!real.join("a_b.txt").exists());
     }
 }

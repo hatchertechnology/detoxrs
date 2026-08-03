@@ -25,6 +25,18 @@
 //! [`undo`] is the same loop with the same recheck, the same no-clobber rename and
 //! its own journal, which is what makes an undo itself undoable without a second
 //! code path.
+//!
+//! **Declared divergence from §5.5.** That section says undo "runs through the same
+//! no-clobber rename path and the same collision engine as a forward run, so undo
+//! can also report conflicts". It runs through the same rename path but **not** the
+//! collision engine: `plan()` derives destinations by transforming names, and an
+//! undo's destinations are the recorded originals, so putting them through the
+//! planner would re-clean them instead of restoring them. The consequence is that
+//! an occupied destination comes back as a per-item `AlreadyExists` failure rather
+//! than as a conflict with a renumbered alternative -- which is the behaviour we
+//! want anyway, because an undo that invents `Report-2.pdf` to restore into has not
+//! undone anything. Recorded here rather than left for a reader to notice; an
+//! adversarial review found this undeclared.
 
 use crate::fsops::RenameOps;
 use crate::journal::{JournalWrite, UndoItem};
@@ -148,13 +160,21 @@ fn attempt(
     journal: &mut dyn JournalWrite,
     out: &mut impl Write,
 ) -> Result<(), Fail> {
-    let src = item.dir.join(&item.from);
-    let dst = item.dir.join(&item.to);
+    // Step 0: pin the directory. Everything below happens through this one
+    // handle, so the entry that is checked and the entry that is renamed are
+    // provably in the same directory even if the path that named it is renamed,
+    // replaced, or swapped for a symlink while we work. Resolving `item.dir` a
+    // second time down at the rename is what an adversarial review reproduced as a
+    // wrong-file rename with a falsely successful journal record.
+    let dir = ops
+        .open(&item.dir)
+        .map_err(|e| Fail::Item(format!("cannot open the containing directory: {e}")))?;
 
     // Step 1: is this still the entry that was previewed?
-    let fresh = std::fs::symlink_metadata(&src)
+    let fresh = ops
+        .ident_at(&dir, &item.from)
         .map_err(|e| Fail::Item(format!("no longer readable since the preview: {e}")))?;
-    if !same_entry(&fresh, item.ident) {
+    if !same_entry(fresh, item.ident) {
         return Err(Fail::Item(
             "changed since the preview (a different file now has this name); not renamed"
                 .to_owned(),
@@ -164,8 +184,8 @@ fn attempt(
     // Step 2: has anything appeared at the destination since the walk? A
     // same-inode respell is not an occupant -- that is the case-only and
     // NFD -> NFC rename, where source and destination are one file.
-    if let Ok(occupant) = std::fs::symlink_metadata(&dst)
-        && !same_entry(&occupant, item.ident)
+    if let Ok(occupant) = ops.ident_at(&dir, &item.to)
+        && !same_entry(occupant, item.ident)
     {
         return Err(Fail::Item(format!(
             "{} appeared since the preview; not renamed",
@@ -181,7 +201,7 @@ fn attempt(
         ))
     })?;
 
-    match ops.rename_noreplace(&item.dir, &item.from, &item.to) {
+    match ops.rename_noreplace(&dir, &item.from, &item.to) {
         Ok(()) => {
             // A `done` that cannot be written is not worth stopping for: the
             // rename happened, and `undo` treats an intent with no outcome as
@@ -190,7 +210,7 @@ fn attempt(
             writeln!(
                 out,
                 "{}  ->  {}",
-                escape(src.as_os_str()),
+                escape(item.dir.join(&item.from).as_os_str()),
                 escape(item.to.as_os_str())
             )
             .map_err(|e| Fail::Batch(format!("cannot write output: {e}")))
@@ -216,25 +236,20 @@ fn attempt(
 /// mismatch would mean an ordinary write to a file whose *name* is still the one
 /// previewed, and refusing to rename that would be refusing for no reason.
 /// `nlink` is not compared either, for the same reason.
-#[cfg(unix)]
-fn same_entry(md: &std::fs::Metadata, recorded: Ident) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    md.dev() == recorded.dev && md.ino() == recorded.ino
-}
-
-/// Windows is best-effort (owner decision, 2026-07-31): `walk` records `dev` and
-/// `ino` as zero there rather than faking them from `file_index`, so this check
-/// degenerates to "the name still exists", which is what the `symlink_metadata`
-/// call above already established. Stated rather than hidden: the identity
-/// guarantee is a tier-1 guarantee.
-#[cfg(not(unix))]
-fn same_entry(_md: &std::fs::Metadata, _recorded: Ident) -> bool {
-    true
+///
+/// On a platform where [`RenameOps::ident_at`] cannot produce real numbers -- the
+/// Windows best-effort tier, where `walk` also records zeroes rather than faking
+/// them from `file_index` -- both sides are zero and this degenerates to "the name
+/// still exists", which the `ident_at` call itself already established. Stated
+/// rather than hidden: the identity guarantee is a tier-1 guarantee.
+const fn same_entry(fresh: Ident, recorded: Ident) -> bool {
+    fresh.dev == recorded.dev && fresh.ino == recorded.ino
 }
 
 #[cfg(test)]
 mod tests {
     use super::{ItemResult, run, undo};
+    use crate::fsops::Dir;
     use crate::fsops::{PlatformRenameOps, RenameErr, RenameOps};
     use crate::journal::{JournalWrite, UndoItem};
     use detoxrs_core::plan::{EntryKind, Ident, PlanItem, Resolution};
@@ -242,6 +257,7 @@ mod tests {
     use std::ffi::{OsStr, OsString};
     use std::fs;
     use std::path::Path;
+    use std::rc::Rc;
     use std::time::UNIX_EPOCH;
 
     /// A journal that keeps its records in memory, so the loop's protocol can be
@@ -277,12 +293,54 @@ mod tests {
     }
 
     /// §8.4's "`RENAME_NOREPLACE` unsupported" row needs a rename that fails a
-    /// given way on demand, and no filesystem here provides one.
+    /// given way on demand, and no filesystem here provides one. The checks
+    /// delegate to the real thing so only the rename is faulted.
     struct AlwaysFails(RenameErr);
 
     impl RenameOps for AlwaysFails {
-        fn rename_noreplace(&self, _d: &Path, _f: &OsStr, _t: &OsStr) -> Result<(), RenameErr> {
+        fn open(&self, dir: &Path) -> Result<Dir, RenameErr> {
+            PlatformRenameOps.open(dir)
+        }
+        fn ident_at(&self, dir: &Dir, name: &OsStr) -> Result<Ident, RenameErr> {
+            PlatformRenameOps.ident_at(dir, name)
+        }
+        fn rename_noreplace(&self, _d: &Dir, _f: &OsStr, _t: &OsStr) -> Result<(), RenameErr> {
             Err(self.0)
+        }
+    }
+
+    /// Records the rename into a log shared with the journal double, so the
+    /// *interleaving* of the two can be asserted rather than each in isolation.
+    struct LoggingOps(Rc<RefCell<Vec<String>>>);
+
+    impl RenameOps for LoggingOps {
+        fn open(&self, dir: &Path) -> Result<Dir, RenameErr> {
+            PlatformRenameOps.open(dir)
+        }
+        fn ident_at(&self, dir: &Dir, name: &OsStr) -> Result<Ident, RenameErr> {
+            PlatformRenameOps.ident_at(dir, name)
+        }
+        fn rename_noreplace(&self, dir: &Dir, from: &OsStr, to: &OsStr) -> Result<(), RenameErr> {
+            self.0.borrow_mut().push("rename".to_owned());
+            PlatformRenameOps.rename_noreplace(dir, from, to)
+        }
+    }
+
+    /// A journal that appends to a caller-supplied log.
+    struct LoggingJournal(Rc<RefCell<Vec<String>>>);
+
+    impl JournalWrite for LoggingJournal {
+        fn intent(&mut self, _i: &PlanItem) -> std::io::Result<()> {
+            self.0.borrow_mut().push("intent".to_owned());
+            Ok(())
+        }
+        fn done(&mut self, _i: &PlanItem) -> std::io::Result<()> {
+            self.0.borrow_mut().push("done".to_owned());
+            Ok(())
+        }
+        fn failed(&mut self, _i: &PlanItem, _w: RenameErr) -> std::io::Result<()> {
+            self.0.borrow_mut().push("failed".to_owned());
+            Ok(())
         }
     }
 
@@ -387,29 +445,42 @@ mod tests {
     }
 
     /// The source is not the file that was previewed any more.
+    ///
+    /// Deterministic, unlike an earlier version of this test which replaced the
+    /// file on disk and then asserted `renamed + failed == 1` -- a statement that
+    /// is true whether or not the identity check exists, as a mutation run proved.
+    /// Here the recorded identity cannot match anything, so refusing is the only
+    /// correct outcome and the assertion says so.
     #[test]
     fn a_replaced_source_is_refused() {
         let t = tempfile::tempdir().expect("tempdir");
         fs::write(t.path().join("a b.txt"), b"original").expect("write");
-        let items = vec![item(t.path(), "a b.txt", "a_b.txt")];
-        fs::remove_file(t.path().join("a b.txt")).expect("rm");
-        fs::write(t.path().join("a b.txt"), b"impostor").expect("write");
+        let mut items = vec![item(t.path(), "a b.txt", "a_b.txt")];
+        items[0].ident = Ident {
+            dev: u64::MAX,
+            ino: u64::MAX,
+            nlink: 1,
+            mtime: UNIX_EPOCH,
+        };
 
-        let s = run(
-            &items,
-            &PlatformRenameOps,
-            &mut FakeJournal::default(),
-            &mut Vec::new(),
+        let mut j = FakeJournal::default();
+        let s = run(&items, &PlatformRenameOps, &mut j, &mut Vec::new());
+
+        assert_eq!(s.renamed, 0);
+        assert_eq!(s.failed, 1);
+        assert!(
+            matches!(&s.outcomes[0], ItemResult::Failed(why) if why.contains("changed since the preview")),
+            "{:?}",
+            s.outcomes[0]
         );
-        // On a filesystem that reuses inode numbers immediately this can pass the
-        // identity check, in which case the rename is correct and the assertion
-        // below is the one that matters: exactly one of the two names exists.
-        assert_eq!(s.renamed + s.failed, 1);
         assert_eq!(
-            u8::from(t.path().join("a b.txt").exists())
-                + u8::from(t.path().join("a_b.txt").exists()),
-            1
+            fs::read(t.path().join("a b.txt")).expect("read"),
+            b"original",
+            "the source must be untouched"
         );
+        assert!(!t.path().join("a_b.txt").exists());
+        // Refused before the journal was touched.
+        assert!(j.lines.borrow().is_empty());
     }
 
     /// `EROFS` will fail every remaining item, so it must produce one message
@@ -458,6 +529,56 @@ mod tests {
         );
         assert_eq!(s.failed, 2);
         assert!(s.aborted.is_none());
+    }
+
+    /// **The ordering, asserted deterministically.** The design's central rule is
+    /// that a durable `intent` is written *before* the rename, so a crash can never
+    /// leave a rename nobody recorded.
+    ///
+    /// This test exists because the `kill -9` test in `tests/apply.rs` cannot
+    /// enforce it: an adversarial review moved `journal.intent` to *after* the
+    /// rename and that test passed 6 runs out of 6, because it only ever checks the
+    /// journal against itself. Here the journal double and the rename share one
+    /// event log, so the interleaving itself is the assertion and the inversion
+    /// fails instantly and every time.
+    #[test]
+    fn the_intent_is_recorded_before_the_rename_not_after() {
+        let t = tempfile::tempdir().expect("tempdir");
+        fs::write(t.path().join("a b.txt"), b"x").expect("write");
+        let items = vec![item(t.path(), "a b.txt", "a_b.txt")];
+
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let s = run(
+            &items,
+            &LoggingOps(Rc::clone(&log)),
+            &mut LoggingJournal(Rc::clone(&log)),
+            &mut Vec::new(),
+        );
+
+        assert_eq!(s.renamed, 1);
+        assert_eq!(
+            log.borrow().as_slice(),
+            ["intent", "rename", "done"],
+            "the journal protocol's order is the safety property"
+        );
+    }
+
+    /// A failed rename must still be bracketed by an intent, so an interrupted
+    /// attempt is never invisible.
+    #[test]
+    fn a_failed_rename_is_also_journalled_intent_first() {
+        let t = tempfile::tempdir().expect("tempdir");
+        fs::write(t.path().join("a b.txt"), b"x").expect("write");
+        let items = vec![item(t.path(), "a b.txt", "a_b.txt")];
+
+        let log = Rc::new(RefCell::new(Vec::new()));
+        run(
+            &items,
+            &AlwaysFails(RenameErr::PermissionDenied),
+            &mut LoggingJournal(Rc::clone(&log)),
+            &mut Vec::new(),
+        );
+        assert_eq!(log.borrow().as_slice(), ["intent", "failed"]);
     }
 
     /// The round trip, in one process: apply, then undo, and the tree is what it

@@ -75,10 +75,120 @@ fn exec_renames_and_says_how_to_undo() {
     let text = String::from_utf8(out.stdout).expect("utf8");
 
     assert!(text.contains("1 renamed"), "{text}");
-    assert!(text.contains("detoxrs undo "), "{text}");
     assert_eq!(fs::read(f.path("Screen_Shot.png")).expect("read"), b"shot");
     assert!(!f.path("Screen Shot.png").exists());
     assert_eq!(f.journals().len(), 1, "one journal per batch");
+
+    // The printed hint must be a working command, not just plausible text. An
+    // earlier version of this test asserted only that "detoxrs undo " appeared,
+    // which a mutation run showed would pass with any id at all -- including an
+    // empty one or another run's.
+    let id = text
+        .lines()
+        .find_map(|l| l.strip_prefix("Undo with: detoxrs undo "))
+        .expect("the report names a batch to undo")
+        .trim()
+        .to_owned();
+    let undone = f.run().args(["undo", &id]).output().expect("runs");
+    assert_eq!(undone.status.code(), Some(0), "{:?}", stderr(&undone));
+    assert!(
+        f.path("Screen Shot.png").exists(),
+        "the id printed by -x did not undo that run"
+    );
+}
+
+/// `undo --last` must mean the most recently created batch, and it must not depend
+/// on the wall clock to know which that is: `SystemTime::now()` can step backwards
+/// and an earlier design ordered batches by a timestamp in the filename.
+#[test]
+fn last_means_most_recently_created() {
+    let f = Fixture::new();
+    for name in ["a file.txt", "b file.txt", "c file.txt"] {
+        f.write(name, b"x");
+    }
+
+    // Three batches in rapid succession, each renaming exactly one file.
+    for name in ["a file.txt", "b file.txt", "c file.txt"] {
+        f.run().args(["-x", name]).assert().success();
+    }
+    let journals = f.journals();
+    assert_eq!(journals.len(), 3);
+
+    // Sorting by name must equal creation order, which is what `list()` relies on.
+    let mut sorted = journals.clone();
+    sorted.sort();
+    assert_eq!(sorted, journals, "filenames do not sort in creation order");
+
+    // And --last must revert the third run, not the first.
+    f.run().args(["undo", "--last"]).assert().success();
+    assert!(
+        f.path("c file.txt").exists(),
+        "--last undid the wrong batch"
+    );
+    assert!(
+        f.path("a_file.txt").exists(),
+        "an earlier batch was disturbed"
+    );
+    assert!(
+        f.path("b_file.txt").exists(),
+        "an earlier batch was disturbed"
+    );
+}
+
+/// A batch with no completion record either crashed or is still being written by a
+/// live run. Undoing it is allowed -- that is the crash-recovery path -- but it must
+/// say so and it must not report success, because a run still in progress will keep
+/// renaming items this undo has already put back, leaving a half-cleaned tree.
+#[test]
+fn undoing_an_unfinished_batch_warns_and_does_not_report_success() {
+    let f = Fixture::new();
+    f.write("a_file.txt", b"x");
+    let dir = f.state.path().join("detoxrs").join("journal");
+    fs::create_dir_all(&dir).expect("mkdir");
+    let ident = {
+        let md = fs::symlink_metadata(f.path("a_file.txt")).expect("lstat");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            (md.dev(), md.ino())
+        }
+        #[cfg(not(unix))]
+        {
+            (0_u64, 0_u64)
+        }
+    };
+    // A journal that records one completed rename and then simply stops: exactly
+    // what a live run's file looks like partway through.
+    fs::write(
+        dir.join("000001-20260803T170000Z.jsonl"),
+        format!(
+            "{{\"v\":1,\"batch\":\"000001-20260803T170000Z\"}}\n\
+             {{\"op\":\"intent\",\"dev\":{},\"ino\":{},\"kind\":\"file\",\"dir\":{:?},\"from\":\"a file.txt\",\"to\":\"a_file.txt\"}}\n\
+             {{\"op\":\"done\",\"ino\":{}}}\n",
+            ident.0,
+            ident.1,
+            f.tree.path().to_str().expect("utf8 tempdir"),
+            ident.1
+        ),
+    )
+    .expect("write journal");
+
+    let out = f.run().args(["undo", "--last"]).output().expect("runs");
+
+    assert!(
+        f.path("a file.txt").exists(),
+        "the recorded item was reverted"
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "an unfinished batch must not report success"
+    );
+    assert!(
+        stderr(&out).contains("no completion record"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 /// The round trip through the CLI, which is the only form a user ever sees.
@@ -340,8 +450,21 @@ fn no_journal_means_no_renames() {
 /// 2. **At most one** item has an `intent` and no outcome, and that is the exact
 ///    interrupted item. More than one would mean the loop had renamed something it
 ///    had not yet finished recording.
-/// 3. `undo --last` puts back every completed rename and leaves the interrupted
+/// 3. Every rename that actually happened is in the journal. This one compares the
+///    journal against the *filesystem* rather than against itself, and it is here
+///    because everything else in this test passes with the intent-before-rename
+///    ordering fully inverted -- a mutation run demonstrated that.
+/// 4. `undo --last` puts back every completed rename and leaves the interrupted
 ///    item alone rather than guessing.
+///
+/// Note on how much this test is worth: property 3 catches an inverted ordering
+/// only when the `kill -9` happens to land inside the window the inversion opens,
+/// measured at roughly a quarter of runs. It never misfires on correct code -- the
+/// invariant always holds there -- but it is a probabilistic detector, not a gate.
+/// The gate for the ordering itself is
+/// `apply::tests::the_intent_is_recorded_before_the_rename_not_after`, which asserts
+/// the interleaving directly and fails every time. Both are kept: one proves the
+/// order, the other proves end-to-end recovery.
 #[cfg(unix)]
 #[test]
 fn crash_mid_batch_is_recoverable() {
@@ -398,6 +521,32 @@ fn crash_mid_batch_is_recoverable() {
     assert!(
         unresolved <= 1,
         "{unresolved} items have an intent and no outcome; at most one may be unknown"
+    );
+
+    // **Property 2b: every rename that actually happened is in the journal.**
+    // This is the assertion the test was missing. Everything above compares the
+    // journal against itself, and a mutation run proved that lets the whole
+    // intent-before-rename ordering be inverted without failing: with the rename
+    // first, each intent still has a `done` right after it, `unresolved` is still
+    // 0, and the file renamed in the gap is simply absent from the journal. Only
+    // the filesystem knows the difference.
+    let journalled: std::collections::BTreeSet<&str> = recs
+        .iter()
+        .filter(|r| r.op == "intent")
+        .map(|r| r.to.as_str())
+        .collect();
+    let unjournalled: Vec<String> = fs::read_dir(f.tree.path())
+        .expect("readable")
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("f_"))
+        .filter(|n| !journalled.contains(n.as_str()))
+        .collect();
+    assert!(
+        unjournalled.is_empty(),
+        "{} rename(s) happened with no journal record at all, so undo can never \
+         reverse them: {unjournalled:?}",
+        unjournalled.len()
     );
 
     // Property 3: undo restores the completed prefix.
