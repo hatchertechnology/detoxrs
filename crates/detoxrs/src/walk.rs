@@ -35,8 +35,11 @@
 
 use detoxrs_core::decode::{Decoded, decode};
 use detoxrs_core::pipeline::{TransformResult, transform};
-use detoxrs_core::plan::{DirIdent, Entry, EntryKind, Ident, VolumeCase};
+use detoxrs_core::plan::{
+    DirIdent, Entry, EntryKind, FIRST_NUMBER, Ident, LAST_NUMBER, VolumeCase, numbered,
+};
 use detoxrs_core::policy::Policy;
+use detoxrs_core::truncate::Limits;
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -44,6 +47,7 @@ use std::fs::{self, Metadata};
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::SystemTime;
 use walkdir::{DirEntry, WalkDir};
 
@@ -105,6 +109,14 @@ pub fn snapshot(paths: &[PathBuf], recursive: bool) -> Result<Vec<Entry>, WalkEr
     // engine keys on this same identity (`Entry::dir_ident`) for the same
     // reason.
     let mut dir_idents: HashMap<PathBuf, DirIdent> = HashMap::new();
+    // C6/C14: a directory's contents, read once per literal spelling and
+    // shared by every top-level argument that names it. Before this cache,
+    // `real_entry_name` (via `corrected_top_level_path`) and
+    // `seed_pre_existing_destination` each ran their own `read_dir` per
+    // *argument*, so `detoxrs *` -- N arguments sharing one parent -- read
+    // that directory N times and `lstat`ed every entry in it N times: O(n^2).
+    // See `DirListing`.
+    let mut listings: HashMap<PathBuf, Rc<DirListing>> = HashMap::new();
     // C9: `plan()` stays I/O-free (its own module doc), so a destination that
     // already exists outside the walked set is checked here, once, before
     // `plan()` ever runs. M1 has no transform flags yet (main.rs's own comment
@@ -124,7 +136,7 @@ pub fn snapshot(paths: &[PathBuf], recursive: bool) -> Result<Vec<Entry>, WalkEr
             .map_err(|e| WalkError::Unreadable(path.clone(), e))?;
         // #3: use the name `readdir` actually stores for this argument, not
         // the bytes typed on the command line -- see `corrected_top_level_path`.
-        let real_path = corrected_top_level_path(&lstat_path, &md);
+        let real_path = corrected_top_level_path(&lstat_path, &md, &mut listings);
         push(&mut out, &mut seen, &mut dir_idents, &real_path, &md, 0);
         // #1: a top-level argument's own basename can collide with a sibling
         // whether or not `-r` is present -- `walk_into` below only ever
@@ -134,6 +146,7 @@ pub fn snapshot(paths: &[PathBuf], recursive: bool) -> Result<Vec<Entry>, WalkEr
             &mut out,
             &mut seen,
             &mut dir_idents,
+            &mut listings,
             &real_path,
             &md,
             &policy,
@@ -158,31 +171,84 @@ pub fn snapshot(paths: &[PathBuf], recursive: bool) -> Result<Vec<Entry>, WalkEr
 /// whichever entry shares the argument's identity. Falls back to the
 /// argument's own bytes when identity is unavailable (non-unix) or the
 /// directory cannot be listed, which is no worse than before this existed.
-fn corrected_top_level_path(path: &Path, md: &Metadata) -> PathBuf {
+fn corrected_top_level_path(
+    path: &Path,
+    md: &Metadata,
+    listings: &mut HashMap<PathBuf, Rc<DirListing>>,
+) -> PathBuf {
     let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
         return path.to_path_buf();
     };
     dev_ino_of(md).map_or_else(
         || path.to_path_buf(),
-        |own| dir.join(real_entry_name(dir, own, name)),
+        |own| {
+            let listing = dir_listing(listings, dir);
+            dir.join(real_entry_name(&listing, own, name))
+        },
     )
 }
 
+/// A directory's contents, read once per literal spelling of its path and
+/// shared by everything in this module that needs to look an entry up by
+/// name or by identity (C6, C14): `real_entry_name`'s exact-name lookup and
+/// identity fallback, and `seed_pre_existing_destination`'s collision-slot
+/// probing, all read from this instead of each doing their own `read_dir`.
+///
+/// Indexed by name for O(1) lookups. `real_entry_name`'s identity fallback
+/// (the APFS normalization case, where the argument's own bytes are not what
+/// `readdir` stores) is the one place this is still walked linearly, and
+/// that path is reached only when the exact name is missing.
+struct DirListing {
+    by_name: HashMap<OsString, Metadata>,
+}
+
+/// `dir`'s listing, cached by its literal path spelling the same way
+/// `dir_ident_of` caches identity -- a directory reached under two different
+/// spellings is read twice, once per spelling, which is the same tradeoff
+/// `dir_ident_of` already makes and is dwarfed by the `read_dir` this avoids
+/// repeating per *argument*.
+fn dir_listing(cache: &mut HashMap<PathBuf, Rc<DirListing>>, dir: &Path) -> Rc<DirListing> {
+    if let Some(listing) = cache.get(dir) {
+        return Rc::clone(listing);
+    }
+    let mut by_name = HashMap::new();
+    if let Ok(read) = fs::read_dir(syscall_path(dir)) {
+        for entry in read.flatten() {
+            if let Ok(md) = entry.metadata() {
+                by_name.insert(entry.file_name(), md);
+            }
+        }
+    }
+    let listing = Rc::new(DirListing { by_name });
+    cache.insert(dir.to_path_buf(), Rc::clone(&listing));
+    listing
+}
+
 #[cfg(unix)]
-fn real_entry_name(dir: &Path, own: (u64, u64), fallback: &OsStr) -> OsString {
-    let Ok(read) = fs::read_dir(syscall_path(dir)) else {
+fn real_entry_name(listing: &DirListing, own: (u64, u64), fallback: &OsStr) -> OsString {
+    // C6: try the argument's own spelling first. A same-directory hardlink
+    // shares `own`'s `(dev, ino)` with an entry that is not the one named on
+    // the command line, so searching by identity *before* checking the exact
+    // name picks whichever of them `readdir` happens to list first -- which
+    // is exactly the defect this function exists to avoid reintroducing.
+    // When the exact name is present (the overwhelmingly common case), it is
+    // unambiguously the entry the user named, hardlinks or not.
+    if listing.by_name.contains_key(fallback) {
         return fallback.to_os_string();
-    };
-    for entry in read.flatten() {
-        if entry.metadata().is_ok_and(|md| unix_dev_ino(&md) == own) {
-            return entry.file_name();
+    }
+    // Only a normalization mismatch (APFS resolving an NFC-typed argument to
+    // an NFD-stored entry, or vice versa) reaches here, and identity is the
+    // only way to find that entry's real name.
+    for (name, md) in &listing.by_name {
+        if unix_dev_ino(md) == own {
+            return name.clone();
         }
     }
     fallback.to_os_string()
 }
 
 #[cfg(not(unix))]
-fn real_entry_name(_dir: &Path, _own: (u64, u64), fallback: &OsStr) -> OsString {
+fn real_entry_name(_listing: &DirListing, _own: (u64, u64), fallback: &OsStr) -> OsString {
     fallback.to_os_string()
 }
 
@@ -291,6 +357,7 @@ fn seed_pre_existing_destination(
     out: &mut Vec<Entry>,
     seen: &mut HashSet<(DirIdent, OsString)>,
     dir_idents: &mut HashMap<PathBuf, DirIdent>,
+    listings: &mut HashMap<PathBuf, Rc<DirListing>>,
     path: &Path,
     own_md: &Metadata,
     policy: &Policy,
@@ -307,8 +374,51 @@ fn seed_pre_existing_destination(
     if wanted.text == text {
         return; // already clean; `plan()` calls this `Unchanged` on its own
     }
-    let candidate = dir.join(&wanted.text);
-    let Ok(cand_md) = fs::symlink_metadata(&candidate) else {
+    let listing = dir_listing(listings, dir);
+    let own = dev_ino_of(own_md);
+    seed_candidate(out, seen, dir_idents, dir, &wanted.text, &listing, own);
+
+    // C-12: a non-recursive argument's snapshot otherwise only ever learns
+    // about the *unnumbered* destination, so if that name is taken,
+    // `plan()`'s allocator renumbers to `-2` blind to whether `-2` itself is
+    // free -- and `apply`'s late recheck then refuses it as having
+    // "appeared since the preview", which is false: the file was there
+    // before the walk started. `-r` gets this right only because recursion
+    // happens to put the whole directory in the snapshot; a single-file or
+    // non-recursive argument needs the same visibility deliberately.
+    //
+    // The directory listing is already in memory (`listing`, cached above
+    // for C-14), so checking every candidate `plan()`'s allocator might try
+    // is a HashMap lookup each, not a syscall -- `numbered()` is the same
+    // function `plan()` uses, so the candidates checked here are exactly the
+    // ones it will probe, in the same order, stopping for the same reason
+    // (once a suffix no longer fits the length budget, no longer one does).
+    let limits = Limits {
+        bytes: policy.max_len_bytes,
+        utf16: policy.max_len_utf16,
+    };
+    for n in FIRST_NUMBER..=LAST_NUMBER {
+        let Some(candidate) = numbered(&wanted.text, n, &limits) else {
+            break;
+        };
+        seed_candidate(out, seen, dir_idents, dir, &candidate, &listing, own);
+    }
+}
+
+/// If `candidate` names an entry actually present in `listing`, freeze it
+/// into the snapshot as an ordinary (already-clean, `Unchanged`) entry so
+/// `plan()`'s occupancy layer can see it, unless it is `own` seen again under
+/// its own transformed spelling.
+fn seed_candidate(
+    out: &mut Vec<Entry>,
+    seen: &mut HashSet<(DirIdent, OsString)>,
+    dir_idents: &mut HashMap<PathBuf, DirIdent>,
+    dir: &Path,
+    candidate: &str,
+    listing: &DirListing,
+    own: Option<(u64, u64)>,
+) {
+    let Some(cand_md) = listing.by_name.get(OsStr::new(candidate)) else {
         return;
     };
     // #2: a normalization-insensitive lookup filesystem (APFS) can resolve
@@ -317,12 +427,12 @@ fn seed_pre_existing_destination(
     // one of them). That is this entry seen a second time under its own
     // destination's spelling, not a second occupant -- pushing it would make
     // the planner number a rename that has nothing left to collide with.
-    if let (Some(own), Some(cand)) = (dev_ino_of(own_md), dev_ino_of(&cand_md))
+    if let (Some(own), Some(cand)) = (own, dev_ino_of(cand_md))
         && own == cand
     {
         return;
     }
-    push(out, seen, dir_idents, &candidate, &cand_md, 0);
+    push(out, seen, dir_idents, &dir.join(candidate), cand_md, 0);
 }
 
 /// `dir` itself, unless it is `""`, POSIX's spelling of "the current

@@ -231,13 +231,15 @@ pub enum PlanError {
     InternalInconsistency(String),
 }
 
-/// First `-N` suffix tried, and the last. `2..=999` is 998 candidate probes per
-/// source, which is §5.3's stated ceiling rather than a computed one: a directory
-/// with a thousand names colliding on one destination is a case where the honest
-/// output is a report, not a rename.
-const FIRST_NUMBER: u32 = 2;
+/// First `-N` suffix tried.
+///
+/// `2..=999` is 998 candidate probes per source, which is §5.3's stated
+/// ceiling rather than a computed one: a directory with a thousand names
+/// colliding on one destination is a case where the honest output is a
+/// report, not a rename.
+pub const FIRST_NUMBER: u32 = 2;
 /// See [`FIRST_NUMBER`].
-const LAST_NUMBER: u32 = 999;
+pub const LAST_NUMBER: u32 = 999;
 
 /// Build a plan. No I/O, no panics, no filesystem access of any kind.
 ///
@@ -719,7 +721,13 @@ fn is_fixed_point(candidate: &str, p: &Policy) -> bool {
 /// the alternatives outright -- we never drop the numbering to fit and never
 /// exceed the limit, so "no name" is the honest answer and the caller turns it
 /// into a `Conflict`.
-fn numbered(want: &str, n: u32, limits: &Limits) -> Option<String> {
+///
+/// `pub` so `walk.rs` (C-12) can generate the same candidate strings this
+/// module's own allocator will try, and check them against a directory
+/// listing it already has in hand -- rather than reimplementing the stem/
+/// suffix/extension arithmetic a second time in a different crate.
+#[must_use]
+pub fn numbered(want: &str, n: u32, limits: &Limits) -> Option<String> {
     let (stem, ext) = split_extension(want);
     let suffix = format!("-{n}");
     let budget = Limits {

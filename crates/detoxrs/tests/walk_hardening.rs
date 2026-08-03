@@ -386,3 +386,103 @@ fn single_file_argument_spelling_does_not_change_the_outcome() {
         );
     }
 }
+
+// ---- C6: a same-directory hardlink must not steal an argument's identity --
+
+/// `detoxrs -x 'a b.txt'` must rename `a b.txt`, never `c d.txt`, even when
+/// the two share an inode. Before the fix, `real_entry_name` searched the
+/// directory for *any* entry whose `(dev, ino)` matched and returned the
+/// first one `readdir` listed -- which can be a hardlinked sibling the user
+/// never named.
+#[cfg(unix)]
+#[test]
+fn a_same_directory_hardlink_does_not_steal_the_named_argument() {
+    let root = TempDir::new().expect("tempdir");
+    let named = root.path().join("a b.txt");
+    let sibling = root.path().join("c d.txt");
+    fs::write(&named, "x").expect("write");
+    fs::hard_link(&named, &sibling).expect("hardlink");
+
+    detoxrs(root.path())
+        .args(["-x", "a b.txt"])
+        .assert()
+        .success();
+
+    assert!(
+        root.path().join("a_b.txt").exists(),
+        "the argument's own name must be the one renamed"
+    );
+    assert!(
+        sibling.exists() && read(&sibling) == "x",
+        "the hardlinked sibling the user never named must be left alone"
+    );
+}
+
+// ---- C12: non-recursive numbering must see the whole directory ------------
+
+/// A single-file, non-recursive argument must pick the same collision number
+/// a recursive walk of the same tree would pick. Before the fix, only the
+/// unnumbered destination was checked against the filesystem, so `plan()`
+/// picked `-2` blind to an existing `a_b-2.txt` and `apply` refused the item,
+/// misreporting the pre-existing file as having "appeared since the
+/// preview".
+#[test]
+fn single_file_numbering_matches_what_recursive_discovery_would_pick() {
+    let root = TempDir::new().expect("tempdir");
+    fs::write(root.path().join("a b.txt"), "dirty").expect("write");
+    fs::write(root.path().join("a_b.txt"), "taken").expect("write");
+    fs::write(root.path().join("a_b-2.txt"), "also taken").expect("write");
+
+    detoxrs(root.path())
+        .args(["-x", "a b.txt"])
+        .assert()
+        .success();
+
+    assert!(
+        root.path().join("a_b-3.txt").exists(),
+        "must skip past both occupied slots, the same as `-r .` would"
+    );
+    assert_eq!(read(&root.path().join("a_b.txt")), "taken");
+    assert_eq!(read(&root.path().join("a_b-2.txt")), "also taken");
+}
+
+// ---- C14: argument resolution must not be quadratic in argument count -----
+
+/// `detoxrs` invoked with every file in a directory as a separate argument
+/// (what a shell glob produces) must read that directory a small, constant
+/// number of times, not once per argument. Before the fix, `real_entry_name`
+/// ran its own `read_dir` plus an `lstat` per entry for every top-level
+/// argument, so N arguments sharing one parent did O(N^2) work.
+///
+/// A wall-clock assertion is flaky in general, but counting the actual work
+/// (directory scans, `lstat` calls) would need instrumentation this module
+/// does not have, and adding it only for a test is more machinery than the
+/// bug is worth. Instead this pins a generous ceiling measured against the
+/// unfixed code, not the fixed one: 2500 single-file arguments sharing one
+/// directory took 7.2s for the quadratic version in an unoptimized (`dev`)
+/// build on the development machine (the review measured 10.5s for 3000
+/// args in a *release* build, so a debug build's constant is if anything
+/// worse), and the fix runs the same input in well under a second -- an
+/// order of magnitude of headroom in both directions, which is what makes
+/// this bound a shape assertion in practice rather than a timing race.
+#[test]
+fn many_single_file_arguments_in_one_directory_do_not_rescan_it_quadratically() {
+    let root = TempDir::new().expect("tempdir");
+    let names: Vec<String> = (0..2500).map(|i| format!("f_{i:04}.txt")).collect();
+    for name in &names {
+        fs::write(root.path().join(name), "x").expect("write");
+    }
+
+    let start = std::time::Instant::now();
+    let mut cmd = detoxrs(root.path());
+    cmd.args(&names);
+    cmd.assert().success();
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "2500 single-file arguments in one directory took {elapsed:?}; a \
+         quadratic real_entry_name took 7.2s for the same input on this \
+         machine in a debug build"
+    );
+}
