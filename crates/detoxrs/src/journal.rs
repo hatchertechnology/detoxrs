@@ -128,25 +128,37 @@ impl Journal {
     /// readable by a human, but nothing depends on it for ordering any more.
     ///
     /// A gap in the sequence (someone deleted an old journal) is harmless: only the
-    /// maximum matters. Fixed width so a lexical sort is a numeric sort.
+    /// maximum matters. Fixed width so a lexical sort is a numeric sort -- for the
+    /// first million batches; past that, ordering falls back to the parsed number
+    /// rather than the padded text (see [`list`]).
+    ///
+    /// **C-10 / O3-3.** The directory's filenames are attacker- or corruption-
+    /// reachable (a shared `XDG_STATE_HOME`, a hand-planted file), so `max` is
+    /// untrusted input the same way a journal record's `from`/`to` are. A filename
+    /// whose leading token parses as `u64::MAX` used to make `max + 1` overflow:
+    /// a panic (exit 101) in a debug build, a silent wraparound to `0` in a
+    /// release one. Refusing outright -- rather than saturating at `u64::MAX` and
+    /// quietly reusing sequence numbers -- keeps the "only the maximum matters"
+    /// invariant this function is named for from ever going backwards.
     fn next_seq(dir: &Path) -> io::Result<u64> {
-        let mut max = 0;
+        let mut max: u64 = 0;
         let entries = match fs::read_dir(dir) {
             Ok(e) => e,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(1),
             Err(e) => return Err(e),
         };
         for entry in entries.filter_map(Result::ok) {
-            let name = entry.file_name();
-            if let Some(seq) = name
-                .to_str()
-                .and_then(|n| n.split('-').next())
-                .and_then(|p| p.parse::<u64>().ok())
-            {
+            if let Some(seq) = parse_seq(&entry.file_name()) {
                 max = max.max(seq);
             }
         }
-        Ok(max + 1)
+        max.checked_add(1).ok_or_else(|| {
+            io::Error::other(
+                "the journal directory already contains a filename at the highest possible \
+                 sequence number; it is corrupt or hostile. Move it aside before running \
+                 detoxrs again.",
+            )
+        })
     }
 
     /// This batch's id, which is also its file's stem: what `undo <BATCH-ID>` takes.
@@ -305,6 +317,20 @@ pub struct Replay {
     /// without checking that they named the same inode. For the one file the whole
     /// safety story rests on, silence was the wrong failure mode.
     pub anomalies: Vec<String>,
+    /// Renames the forward run completed and journalled (a `done` record exists),
+    /// but whose own `intent` record failed to parse -- a hand-edited or corrupt
+    /// record, or a name this build's platform now refuses (C1's `\` case, before
+    /// that fix) -- so no [`UndoItem`] could be built for it.
+    ///
+    /// **C-11 / O3-2.** These items reach neither `items` nor a `Failed` outcome
+    /// in `apply::Summary`, because they never become a `PlanItem` at all -- they
+    /// are dropped before `undo`'s per-item loop even starts. Before this field
+    /// existed, `main.rs`'s closing tally was built only from `renamed`/`failed`,
+    /// so a batch that renamed 2 items and could only undo 1 printed
+    /// `1 reverted, 0 refused` -- correct-looking arithmetic over the wrong total.
+    /// The anomaly lines say the same thing on stderr, but the summary line is
+    /// the one a user actually reads, and it must not contradict them.
+    pub lost: usize,
 }
 
 /// Read a batch journal.
@@ -329,7 +355,11 @@ pub struct Replay {
 /// Any failure to open or read the file.
 pub fn replay(path: &Path) -> io::Result<Replay> {
     let mut out = Replay::default();
-    let mut pending: Option<(u64, UndoItem)> = None;
+    // `Err(())` is a pending intent whose own record failed to parse -- its
+    // inode (when the record had one) is kept anyway, purely so a `done`/`failed`
+    // a few lines later can still be matched to it and the two anomalies don't
+    // get reported as unrelated (C-11).
+    let mut pending: Option<(u64, Result<UndoItem, ()>)> = None;
     let bytes = fs::read(path)?;
     let lines = split_lines(&bytes);
 
@@ -355,17 +385,29 @@ pub fn replay(path: &Path) -> io::Result<Replay> {
         };
         match rec.get("op").and_then(Value::as_str) {
             Some("intent") => {
-                if let Some((ino, item)) = pending.take() {
+                if let Some((ino, prev)) = pending.take() {
+                    let name = prev.as_ref().map_or_else(
+                        |()| "?".to_owned(),
+                        |item| item.original.to_string_lossy().into_owned(),
+                    );
                     out.anomalies.push(format!(
-                        "line {}: a new intent starts while {} (inode {ino}) has no recorded \
-                         outcome; that item cannot be undone and must be checked by hand",
+                        "line {}: a new intent starts while {name} (inode {ino}) has no \
+                         recorded outcome; that item cannot be undone and must be checked by \
+                         hand",
                         n + 1,
-                        item.original.to_string_lossy()
                     ));
                 }
                 match parse_intent(&rec) {
-                    Ok(item) => pending = Some((item.ident.ino, item)),
-                    Err(reason) => out.anomalies.push(format!("line {} {reason}", n + 1)),
+                    Ok(item) => pending = Some((item.ident.ino, Ok(item))),
+                    Err(reason) => {
+                        out.anomalies.push(format!("line {} {reason}", n + 1));
+                        // Keep the inode, if the record had one, purely so a
+                        // later `done` can still be matched to this intent
+                        // instead of reading as an unrelated, unexplained line.
+                        if let Some(ino) = rec.get("ino").and_then(Value::as_u64) {
+                            pending = Some((ino, Err(())));
+                        }
+                    }
                 }
             }
             Some(op @ ("done" | "failed")) => {
@@ -373,18 +415,43 @@ pub fn replay(path: &Path) -> io::Result<Replay> {
                 match pending.take() {
                     // The outcome must name the intent it closes. Positional
                     // trust is what let an item disappear silently.
-                    Some((ino, item)) if claimed == Some(ino) => {
+                    Some((ino, Ok(item))) if claimed == Some(ino) => {
                         if op == "done" {
                             out.items.push(item);
                         }
                     }
-                    Some((ino, item)) => {
+                    // C-11: the intent this closes never became an `UndoItem` --
+                    // its own record was rejected -- so a `done` here is a
+                    // completed rename this batch can never undo, not a
+                    // no-op. `failed` needs no such counting: nothing was
+                    // renamed, so there is nothing to lose.
+                    Some((ino, Err(()))) if claimed == Some(ino) => {
+                        if op == "done" {
+                            out.lost += 1;
+                            out.anomalies.push(format!(
+                                "line {n_1}: inode {ino} was renamed by this batch, but its \
+                                 intent record could not be read, so it cannot be undone and \
+                                 must be checked by hand",
+                                n_1 = n + 1
+                            ));
+                        }
+                    }
+                    Some((ino, Ok(item))) => {
                         out.anomalies.push(format!(
                             "line {}: a '{op}' for inode {} closes an intent for inode {ino} \
                              ({}); neither is trusted and neither will be undone",
                             n + 1,
                             claimed.map_or_else(|| "?".to_owned(), |i| i.to_string()),
                             item.original.to_string_lossy()
+                        ));
+                    }
+                    Some((ino, Err(()))) => {
+                        out.anomalies.push(format!(
+                            "line {}: a '{op}' for inode {} closes an intent for inode {ino} \
+                             that could not be read; neither is trusted and neither will be \
+                             undone",
+                            n + 1,
+                            claimed.map_or_else(|| "?".to_owned(), |i| i.to_string()),
                         ));
                     }
                     None => out
@@ -396,7 +463,11 @@ pub fn replay(path: &Path) -> io::Result<Replay> {
             _ => {}
         }
     }
-    out.interrupted = pending.map(|(_, item)| item);
+    // A dangling `Err` (an unreadable intent with nothing after it) has already
+    // put its own explanation in `anomalies` above; there is no `UndoItem` to
+    // build for it, so it cannot become `interrupted` too, only a well-formed
+    // pending intent can.
+    out.interrupted = pending.and_then(|(_, item)| item.ok());
     out.items.reverse();
     Ok(out)
 }
@@ -531,8 +602,28 @@ fn parse_intent(rec: &Value) -> Result<UndoItem, &'static str> {
     })
 }
 
-/// Every recorded batch, oldest first. The timestamp prefix is fixed-width, so
-/// sorting the names sorts the batches.
+/// The leading `<seq>` token of a journal filename, as the total order batches
+/// are actually created in.
+///
+/// **C-10 / O3-4.** `{seq:06}` is fixed-width only below 1 000 000: past it,
+/// `"1000000-…"` sorts lexically *before* `"999999-…"`, so a byte sort of the
+/// filenames stops being a sort of the batches. Parsing the number and ordering
+/// on that instead of on the padded text is what keeps `--last` correct on both
+/// sides of that boundary, and it is also what makes a name this program did
+/// not write -- one with no numeric prefix at all -- a filename [`list`]
+/// declines to treat as a batch, rather than one that quietly sorts wherever a
+/// byte comparison happens to put it.
+fn parse_seq(file_name: &OsStr) -> Option<u64> {
+    file_name.to_str()?.split('-').next()?.parse::<u64>().ok()
+}
+
+/// Every recorded batch, oldest first, ordered by the sequence number actually
+/// parsed out of each filename -- not by a lexical sort of the filenames
+/// themselves, which stops agreeing with creation order past six digits (see
+/// [`parse_seq`]). A `.jsonl` file whose name does not start with a plain
+/// integer is not a batch this program could have written and is left out
+/// entirely, rather than sorted in some undefined position and later handed to
+/// `--last`.
 ///
 /// # Errors
 ///
@@ -545,13 +636,17 @@ pub fn list() -> io::Result<Vec<PathBuf>> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e),
     };
-    let mut out: Vec<PathBuf> = entries
+    let mut out: Vec<(u64, PathBuf)> = entries
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| p.extension() == Some(OsStr::new("jsonl")))
+        .filter_map(|p| {
+            let seq = parse_seq(p.file_stem()?)?;
+            Some((seq, p))
+        })
         .collect();
-    out.sort();
-    Ok(out)
+    out.sort_by_key(|(seq, _)| *seq);
+    Ok(out.into_iter().map(|(_, p)| p).collect())
 }
 
 /// The path of a batch named by id.
@@ -714,7 +809,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{civil_from_days, get_os, put_os, replay, utc_stamp};
+    use super::{civil_from_days, get_os, parse_seq, put_os, replay, utc_stamp};
     use serde_json::json;
     use std::ffi::OsStr;
     use std::time::{Duration, UNIX_EPOCH};
@@ -994,5 +1089,116 @@ mod tests {
             "must not be a lossy string: {rec}"
         );
         assert_eq!(get_os(&rec, "dir").as_deref(), Some(raw));
+    }
+
+    /// C-10 / O3-3. A journal directory can contain a filename this program did
+    /// not write -- planted, corrupted, or (worst case) an attacker sharing
+    /// `XDG_STATE_HOME` -- and a sequence number of `u64::MAX` used to make
+    /// `next_seq`'s `max + 1` overflow: a panic in a debug build, a silent
+    /// wraparound in a release one. It must instead be a plain, reported `Err`.
+    #[test]
+    fn next_seq_refuses_rather_than_overflowing_on_a_crafted_filename() {
+        use std::fs;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            dir.path()
+                .join(format!("{}-20260101T000000Z.jsonl", u64::MAX)),
+            b"",
+        )
+        .expect("write crafted filename");
+
+        let result = super::Journal::next_seq(dir.path());
+        assert!(
+            result.is_err(),
+            "a sequence number at u64::MAX must be refused, not overflowed: {result:?}"
+        );
+    }
+
+    /// C-10 / O3-4. `{seq:06}` is fixed-width only below 1 000 000: past that,
+    /// `"1000000-…"` sorts lexically *before* `"999999-…"`, so a byte sort of
+    /// the filenames no longer agrees with creation order. `list` must order by
+    /// the parsed sequence number instead, or `--last` silently reverts an
+    /// older batch once any batch crosses six digits.
+    #[test]
+    fn list_orders_by_parsed_sequence_not_filename_bytes() {
+        use std::fs;
+        use std::path::PathBuf;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A byte sort would put "1000000-..." before "999999-...": '1' < '9'.
+        fs::write(dir.path().join("999999-20260101T000000Z.jsonl"), b"").expect("write");
+        fs::write(dir.path().join("1000000-20260102T000000Z.jsonl"), b"").expect("write");
+
+        let mut names: Vec<u64> = fs::read_dir(dir.path())
+            .expect("read_dir")
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension() == Some(OsStr::new("jsonl")))
+            .filter_map(|p| parse_seq(p.file_stem()?))
+            .collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            vec![999_999, 1_000_000],
+            "the numeric order, not the lexical one"
+        );
+
+        // Same assertion `list()` itself would give, if it read this directory:
+        // reimplemented against the private `journal_dir` is not possible from
+        // here, so this pins the ordering primitive `list()` is built on.
+        let mut seqs: Vec<(u64, PathBuf)> = fs::read_dir(dir.path())
+            .expect("read_dir")
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension() == Some(OsStr::new("jsonl")))
+            .filter_map(|p| Some((parse_seq(p.file_stem()?)?, p)))
+            .collect();
+        seqs.sort_by_key(|(seq, _)| *seq);
+        assert_eq!(seqs[0].0, 999_999);
+        assert_eq!(seqs[1].0, 1_000_000, "the newest batch must sort last");
+    }
+
+    /// C-11 / O3-2. A `done` record can close an `intent` that failed to parse
+    /// (a corrupt or hand-edited record): a rename really happened and was
+    /// journalled, but no [`UndoItem`] can be built for it. That item must be
+    /// counted as lost, not silently absent from both `items` and the tally.
+    #[test]
+    fn a_done_for_an_unparseable_intent_is_counted_as_lost_not_dropped() {
+        use std::fs;
+
+        let base = tempfile::tempdir().expect("tempdir");
+        let path = base.path().join("j.jsonl");
+
+        let records = [
+            // One legitimate item.
+            json!({
+                "op": "intent", "dev": 1, "ino": 1, "kind": "file", "mtime": 0,
+                "dir": "/tmp/x", "from": "keep.txt", "to": "keep_ok.txt",
+            }),
+            json!({ "op": "done", "ino": 1 }),
+            // An intent missing required fields (dev): parse_intent fails, but
+            // the forward run still renamed and journalled it.
+            json!({
+                "op": "intent", "ino": 999_999, "kind": "file", "mtime": 0,
+                "dir": "/tmp/x", "from": "lost.txt", "to": "lost_ok.txt",
+            }),
+            json!({ "op": "done", "ino": 999_999 }),
+            json!({ "op": "end" }),
+        ];
+        let mut text = String::new();
+        for r in &records {
+            text.push_str(&r.to_string());
+            text.push('\n');
+        }
+        fs::write(&path, text).expect("write journal");
+
+        let replayed = replay(&path).expect("a well-formed journal always reads");
+        assert_eq!(replayed.items.len(), 1, "{:?}", replayed.anomalies);
+        assert_eq!(
+            replayed.lost, 1,
+            "the renamed-but-unparseable item must be counted, not vanish: {:?}",
+            replayed.anomalies
+        );
     }
 }

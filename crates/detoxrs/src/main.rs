@@ -307,7 +307,18 @@ fn undo(u: &cli::Undo) -> Result<u8, String> {
     let suspect = !replay.complete || replay.interrupted.is_some() || !replay.anomalies.is_empty();
 
     if replay.items.is_empty() {
-        println!("nothing to undo in that batch.");
+        // C-11: a batch can have renamed items yet still resolve to zero
+        // `UndoItem`s, when every one of them was dropped before this loop --
+        // see `Replay::lost`. "Nothing to undo" would be a lie in that case.
+        if replay.lost > 0 {
+            println!(
+                "nothing to undo in that batch: {} renamed item{} could not be undone at all.",
+                replay.lost,
+                if replay.lost == 1 { "" } else { "s" }
+            );
+        } else {
+            println!("nothing to undo in that batch.");
+        }
         return Ok(u8::from(suspect));
     }
 
@@ -323,9 +334,18 @@ fn undo(u: &cli::Undo) -> Result<u8, String> {
     if let Err(e) = j.finish() {
         eprintln!("detoxrs: warning: could not close the undo journal ({e}).");
     }
+    // C-11: `s.renamed + s.failed` only covers items that reached this loop.
+    // `replay.lost` is the rest of the batch -- renamed items whose own intent
+    // record was dropped before the loop ever saw them -- and the tally must
+    // say so instead of quietly adding up to less than the batch it describes.
+    let lost_note = if replay.lost > 0 {
+        format!(", {} could not be undone at all", replay.lost)
+    } else {
+        String::new()
+    };
     drop(writeln!(
         out,
-        "\n{} reverted, {} refused. This undo is itself batch {}.",
+        "\n{} reverted, {} refused{lost_note}. This undo is itself batch {}.",
         s.renamed,
         s.failed,
         j.id()

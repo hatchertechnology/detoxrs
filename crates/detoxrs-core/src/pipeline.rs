@@ -284,7 +284,7 @@ pub(crate) fn run_with(input: &str, p: &Policy, disabled: StageMask) -> Transfor
 
 #[cfg(test)]
 mod tests {
-    use super::{StageMask, TransformResult, Unrepresentable, run_with, transform};
+    use super::{Outcome, StageMask, TransformResult, Unrepresentable, run_with, transform};
     use crate::policy::Policy;
     use proptest::prelude::*;
     use unicode_segmentation::UnicodeSegmentation as _;
@@ -345,6 +345,60 @@ mod tests {
         assert_eq!(
             transform("..", &p),
             TransformResult::Unrepresentable(Unrepresentable::ReducesToDotOrDotDot)
+        );
+    }
+
+    // ---- Stage 13's bound is load-bearing (C-13) ------------------------------
+    //
+    // Found by fuzzing `run_with` with an instrumented iteration counter (a
+    // temporary, reverted edit -- see the C-13 write-up) over ~20,000,000
+    // random names and limits: the counter never exceeded 3, but plenty of
+    // inputs needed exactly 2 and this one needed exactly 3. Both are pinned
+    // here so `FIXED_POINT_BOUND` can never again silently drop from 3 to 1 --
+    // which every other test in this suite allows -- without a red test.
+
+    /// Needs exactly **2** passes of stage 13's loop. `"report.tar.gz"` at a
+    /// 7-byte limit doesn't fit at all; step 2 of stage 12 keeps the stem and
+    /// drops the whole `.tar.gz` (its inner segment is short enough to be
+    /// recognized as part of the extension, and an extension that alone
+    /// exceeds the budget falls through to step 3, truncating the whole name),
+    /// landing on `"report."` -- a trailing dot truncation itself created.
+    /// Stage 13's first pass trims that dot to `"report"`, which changes the
+    /// text, so a second pass is required just to confirm nothing moves again.
+    /// At `FIXED_POINT_BOUND == 1` this is `NotConverged` instead.
+    #[test]
+    fn convergence_needs_exactly_two_passes_for_a_truncation_created_trailing_dot() {
+        let p = Policy {
+            separator: '_',
+            max_len_bytes: 7,
+            max_len_utf16: 255,
+        };
+        assert_eq!(
+            transform("report.tar.gz", &p),
+            TransformResult::Name(Outcome {
+                text: "report".to_owned(),
+                truncated: true,
+            }),
+            "a bound below 2 must turn this into NotConverged, not this text"
+        );
+    }
+
+    /// Needs exactly **3** passes. A denser fuzz find: truncation at these
+    /// limits repeatedly re-exposes a fresh trailing `.`/separator for two
+    /// rounds before stage 10 finally leaves nothing behind at all. At
+    /// `FIXED_POINT_BOUND <= 2` this is `NotConverged` instead of resolving to
+    /// `ReducesToEmpty`.
+    #[test]
+    fn convergence_needs_exactly_three_passes_on_a_fuzz_found_input() {
+        let p = Policy {
+            separator: '_',
+            max_len_bytes: 26,
+            max_len_utf16: 3,
+        };
+        assert_eq!(
+            transform("...\u{2044}0.\u{1e9a}\u{300}.\u{1e9a}", &p),
+            TransformResult::Unrepresentable(Unrepresentable::ReducesToEmpty),
+            "a bound below 3 must turn this into NotConverged, not this outcome"
         );
     }
 

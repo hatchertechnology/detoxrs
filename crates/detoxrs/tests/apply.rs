@@ -135,6 +135,81 @@ fn last_means_most_recently_created() {
     );
 }
 
+/// C-10 / O3-4. `{seq:06}` is fixed-width only below one million batches: past
+/// that boundary, `"1000000-…"` sorts lexically *before* `"999999-…"` (`'1' <
+/// '9'`), so a byte sort of the filenames stops agreeing with creation order.
+/// `--last` must still pick the batch with the larger sequence number, not the
+/// one that happens to sort first as text.
+///
+/// Crafting the million real runs this would otherwise take is infeasible in a
+/// test, so the two journal files are written directly -- everything else
+/// (the real renamed files on disk, the real binary, the real identity
+/// recheck) is exactly as a genuine run would leave it.
+#[test]
+fn last_across_the_six_digit_boundary_picks_the_true_last_batch() {
+    let f = Fixture::new();
+    f.write("one 1.txt", b"x");
+    f.write("two 2.txt", b"x");
+
+    let ident = |name: &str| {
+        let md = fs::symlink_metadata(f.path(name)).expect("lstat");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            (md.dev(), md.ino())
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = md;
+            (0_u64, 0_u64)
+        }
+    };
+    let (dev1, ino1) = ident("one 1.txt");
+    let (dev2, ino2) = ident("two 2.txt");
+
+    // What a real `-x` run would have left behind: both renames already done
+    // on disk, in "creation" order (999999 first, 1000000 second).
+    fs::rename(f.path("one 1.txt"), f.path("one_1.txt")).expect("rename 1");
+    fs::rename(f.path("two 2.txt"), f.path("two_2.txt")).expect("rename 2");
+
+    let dir = f.state.path().join("detoxrs").join("journal");
+    fs::create_dir_all(&dir).expect("mkdir");
+    let cwd = f.tree.path().to_str().expect("utf8 tempdir");
+    fs::write(
+        dir.join("999999-20260101T000000Z.jsonl"),
+        format!(
+            "{{\"v\":1,\"batch\":\"999999-20260101T000000Z\"}}\n\
+             {{\"op\":\"intent\",\"dev\":{dev1},\"ino\":{ino1},\"kind\":\"file\",\"mtime\":0,\
+             \"dir\":{cwd:?},\"from\":\"one 1.txt\",\"to\":\"one_1.txt\"}}\n\
+             {{\"op\":\"done\",\"ino\":{ino1}}}\n\
+             {{\"op\":\"end\"}}\n"
+        ),
+    )
+    .expect("write older journal");
+    fs::write(
+        dir.join("1000000-20260102T000000Z.jsonl"),
+        format!(
+            "{{\"v\":1,\"batch\":\"1000000-20260102T000000Z\"}}\n\
+             {{\"op\":\"intent\",\"dev\":{dev2},\"ino\":{ino2},\"kind\":\"file\",\"mtime\":0,\
+             \"dir\":{cwd:?},\"from\":\"two 2.txt\",\"to\":\"two_2.txt\"}}\n\
+             {{\"op\":\"done\",\"ino\":{ino2}}}\n\
+             {{\"op\":\"end\"}}\n"
+        ),
+    )
+    .expect("write newer journal");
+
+    f.run().args(["undo", "--last"]).assert().success();
+
+    assert!(
+        f.path("two 2.txt").exists(),
+        "--last must revert the higher-numbered (truly last) batch"
+    );
+    assert!(
+        f.path("one_1.txt").exists(),
+        "the older, lower-numbered batch must not have been touched"
+    );
+}
+
 /// A batch with no completion record either crashed or is still being written by a
 /// live run. Undoing it is allowed -- that is the crash-recovery path -- but it must
 /// say so and it must not report success, because a run still in progress will keep
@@ -188,6 +263,68 @@ fn undoing_an_unfinished_batch_warns_and_does_not_report_success() {
         stderr(&out).contains("no completion record"),
         "{}",
         stderr(&out)
+    );
+}
+
+/// C-11 / O3-2. A journal can record a completed rename (a `done`) whose own
+/// `intent` record is rejected at replay time -- here, one missing the `dev`
+/// field a hand-edited or corrupt record can drop; C-1's `\`-in-`from` case
+/// was the original repro, but any reason `parse_intent` refuses a record
+/// followed by a real `done` has the same shape. That item is dropped before
+/// `undo`'s per-item loop even runs, so `Summary::renamed` and
+/// `Summary::failed` never see it -- the closing tally must say so instead of
+/// silently adding up to less than the batch it describes.
+#[test]
+fn undo_reports_a_renamed_item_it_could_not_undo_instead_of_dropping_it_silently() {
+    let f = Fixture::new();
+    f.write("keep.txt", b"x");
+    f.write("lost.txt", b"x");
+    let ident = |name: &str| {
+        let md = fs::symlink_metadata(f.path(name)).expect("lstat");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            (md.dev(), md.ino())
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = md;
+            (0_u64, 0_u64)
+        }
+    };
+    let (dev1, ino1) = ident("keep.txt");
+
+    let dir = f.state.path().join("detoxrs").join("journal");
+    fs::create_dir_all(&dir).expect("mkdir");
+    fs::rename(f.path("keep.txt"), f.path("keep_ok.txt")).expect("rename keep");
+    fs::rename(f.path("lost.txt"), f.path("lost_ok.txt")).expect("rename lost");
+    let cwd = f.tree.path().to_str().expect("utf8 tempdir");
+    fs::write(
+        dir.join("000001-20260803T170000Z.jsonl"),
+        format!(
+            "{{\"v\":1,\"batch\":\"000001-20260803T170000Z\"}}\n\
+             {{\"op\":\"intent\",\"dev\":{dev1},\"ino\":{ino1},\"kind\":\"file\",\"mtime\":0,\
+             \"dir\":{cwd:?},\"from\":\"keep.txt\",\"to\":\"keep_ok.txt\"}}\n\
+             {{\"op\":\"done\",\"ino\":{ino1}}}\n\
+             {{\"op\":\"intent\",\"ino\":999999,\"kind\":\"file\",\"mtime\":0,\
+             \"dir\":{cwd:?},\"from\":\"lost.txt\",\"to\":\"lost_ok.txt\"}}\n\
+             {{\"op\":\"done\",\"ino\":999999}}\n\
+             {{\"op\":\"end\"}}\n"
+        ),
+    )
+    .expect("write journal");
+
+    let out = f.run().args(["undo", "--last"]).output().expect("runs");
+    let text = String::from_utf8(out.stdout).expect("utf8");
+
+    assert!(
+        f.path("keep.txt").exists(),
+        "the legitimate item must still be revertible: {text}"
+    );
+    assert_eq!(out.status.code(), Some(1), "a lost item is not success");
+    assert!(
+        text.contains("1 could not be undone"),
+        "the tally must name the dropped item, not just the ones it handled: {text}"
     );
 }
 
