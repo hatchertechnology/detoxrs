@@ -274,6 +274,9 @@ impl UndoItem {
             ident: self.ident,
             depth: 0,
             resolution: Resolution::Rename,
+            // An undo replays a completed rename verbatim; it never re-runs
+            // `transform`, so there is nothing here for stage 12 to shorten.
+            truncated: false,
         }
     }
 }

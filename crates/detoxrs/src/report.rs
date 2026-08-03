@@ -184,6 +184,13 @@ fn line(item: &PlanItem, width: usize) -> String {
     if let Some(kind) = kind_note(item.kind) {
         let _ = write!(out, " [{kind}]");
     }
+    // O2-5: the one transformation that destroys information (stage 12
+    // shortening the name) is the one the report used to have no way to
+    // mention. `to` alone cannot tell a reader "spaces became underscores"
+    // apart from "50 characters were deleted from the end of the name".
+    if item.truncated {
+        let _ = write!(out, " [name shortened to fit the length limit]");
+    }
     // Files only: every directory has nlink >= 2 by construction (`.` and its
     // parent's entry), so noting it there would tag every directory in every
     // preview with a warning that means nothing.
@@ -234,6 +241,9 @@ const fn conflict_note(c: Conflict) -> &'static str {
         Conflict::IntraBatch => "another entry in this directory wants the same name",
         Conflict::PreExisting => "that name is already taken",
         Conflict::Unresolvable => "no free -N suffix below 1000",
+        Conflict::TruncationCollision => {
+            "shortening this name to fit the length limit made it collide with another entry"
+        }
     }
 }
 
@@ -279,6 +289,11 @@ pub fn json(w: &mut impl Write, plan: &Plan, outcomes: Option<&[ItemResult]>) ->
                 },
                 "depth": i.depth,
                 "nlink": i.ident.nlink,
+                // O2-5: whether stage 12 shortened `to` to fit the length
+                // limit. The only field that says information was destroyed
+                // rather than rearranged; a consumer diffing `from`/`to`
+                // cannot otherwise tell a rewrite from a truncation.
+                "truncated": i.truncated,
                 "resolution": match i.resolution {
                     Resolution::Rename => "rename",
                     Resolution::Unchanged => "unchanged",

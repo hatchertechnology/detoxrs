@@ -133,6 +133,13 @@ pub enum Conflict {
     /// Renumbering exhausted its bound (§5.3): every `-N` for `N` in
     /// `2..=999` was either taken or too long to fit the limit.
     Unresolvable,
+    /// C-3: this entry's own name only collides with another entry's wanted
+    /// destination *because* truncation cut off the part that told them
+    /// apart. Reported rather than silently numbered: numbering here would
+    /// paper over the fact that shortening this specific name is what
+    /// created the collision, and `-N` is not a substitute for the bytes it
+    /// removed.
+    TruncationCollision,
 }
 
 /// What the plan will do with an entry.
@@ -192,6 +199,14 @@ pub struct PlanItem {
     pub depth: u32,
     /// What will happen.
     pub resolution: Resolution,
+    /// C-3/O2-5: whether stage 12 shortened `to` from what `transform` would
+    /// otherwise have produced in full. `Outcome.truncated` used to be
+    /// computed and thrown away here -- the one transformation that destroys
+    /// information rather than rearranging it was the one the report could
+    /// not mention. `false` for `Keep`/`Skip`/every `Conflict` but
+    /// `TruncationCollision`, since those never reach stage 12 with a
+    /// shortened result that matters.
+    pub truncated: bool,
 }
 
 /// The whole decision, in apply order: deepest first.
@@ -256,7 +271,7 @@ pub fn plan(
     // between them is invisible to both layers at once.
     let mut wants: HashMap<(DirIdent, Vec<u8>), usize> = HashMap::new();
     for (pos, want) in desired.iter().enumerate() {
-        if let Desired::Rename(text) = want {
+        if let Desired::Rename(text, _) = want {
             let dir_ident = entries[order[pos]].dir_ident;
             *wants
                 .entry((dir_ident, key_of_text(text, case)))
@@ -292,25 +307,44 @@ pub fn plan(
     for (pos, &i) in order.iter().enumerate() {
         let e = &entries[i];
         let dir_ident = e.dir_ident;
+        let truncated = matches!(&desired[pos], Desired::Rename(_, true));
         let (to, resolution) = match &desired[pos] {
             Desired::Keep => (e.name.clone(), Resolution::Unchanged),
             Desired::Skip(reason) => (e.name.clone(), Resolution::Skipped(*reason)),
-            Desired::Rename(text) => {
+            Desired::Rename(text, was_truncated) => {
                 let key = key_of_text(text, case);
-                match on_collision {
-                    OnCollision::Number => allocator.take(dir_ident, text, pos).map_or_else(
-                        || (e.name.clone(), Resolution::Conflict(Conflict::Unresolvable)),
-                        |name| (OsString::from(name), Resolution::Rename),
-                    ),
-                    OnCollision::Skip | OnCollision::Fail => {
-                        if allocator.is_free(dir_ident, &key, pos) {
-                            if wants.get(&(dir_ident, key)).copied().unwrap_or(0) > 1 {
-                                (e.name.clone(), Resolution::Conflict(Conflict::IntraBatch))
+                // C-3: a collision that exists only because truncation cut off
+                // the bytes that told two sources apart must not be silently
+                // renumbered away under the default `Number` policy -- `-N`
+                // would replace the lost distinction with an invented one and
+                // report the batch as `0 conflicts`. Checked against `wants`
+                // (already built for the `Skip`/`Fail` arms below) rather than
+                // against `allocator.take`'s result, because by the time
+                // `take` runs the first of the pair has already claimed the
+                // plain name and the second would look like an ordinary,
+                // unrelated collision.
+                if *was_truncated && wants.get(&(dir_ident, key.clone())).copied().unwrap_or(0) > 1
+                {
+                    (
+                        e.name.clone(),
+                        Resolution::Conflict(Conflict::TruncationCollision),
+                    )
+                } else {
+                    match on_collision {
+                        OnCollision::Number => allocator.take(dir_ident, text, pos).map_or_else(
+                            || (e.name.clone(), Resolution::Conflict(Conflict::Unresolvable)),
+                            |name| (OsString::from(name), Resolution::Rename),
+                        ),
+                        OnCollision::Skip | OnCollision::Fail => {
+                            if allocator.is_free(dir_ident, &key, pos) {
+                                if wants.get(&(dir_ident, key)).copied().unwrap_or(0) > 1 {
+                                    (e.name.clone(), Resolution::Conflict(Conflict::IntraBatch))
+                                } else {
+                                    (OsString::from(text.clone()), Resolution::Rename)
+                                }
                             } else {
-                                (OsString::from(text.clone()), Resolution::Rename)
+                                (e.name.clone(), Resolution::Conflict(Conflict::PreExisting))
                             }
-                        } else {
-                            (e.name.clone(), Resolution::Conflict(Conflict::PreExisting))
                         }
                     }
                 }
@@ -324,6 +358,7 @@ pub fn plan(
             ident: e.ident,
             depth: e.depth,
             resolution,
+            truncated,
         };
         if on_collision == OnCollision::Fail && matches!(item.resolution, Resolution::Conflict(_)) {
             refused.push(item.clone());
@@ -345,8 +380,9 @@ enum Desired {
     Keep,
     /// No representable output, or no text at all.
     Skip(SkipReason),
-    /// This name, if it can be had.
-    Rename(String),
+    /// This name, if it can be had. The `bool` is C-3's `truncated`: whether
+    /// stage 12 shortened this text.
+    Rename(String, bool),
 }
 
 /// Stages 1 and 2-13 for one entry, and nothing else. Pure per entry: this is
@@ -358,7 +394,7 @@ fn desired_for(e: &Entry, p: &Policy) -> Desired {
     match transform(&text, p) {
         TransformResult::Unrepresentable(r) => Desired::Skip(SkipReason::Unrepresentable(r)),
         TransformResult::Name(o) if o.text == text => Desired::Keep,
-        TransformResult::Name(o) => Desired::Rename(o.text),
+        TransformResult::Name(o) => Desired::Rename(o.text, o.truncated),
     }
 }
 
@@ -548,7 +584,7 @@ fn check_no_sibling_chains(
 
     let mut vacated: HashMap<(&Path, &str), usize> = HashMap::new();
     for (pos, want) in desired.iter().enumerate() {
-        if let Desired::Rename(to) = want
+        if let Desired::Rename(to, _) = want
             && nfc[pos] != *to
         {
             vacated.insert((entries[order[pos]].dir.as_path(), nfc[pos].as_str()), pos);
@@ -556,7 +592,9 @@ fn check_no_sibling_chains(
     }
 
     for (pos, want) in desired.iter().enumerate() {
-        let Desired::Rename(to) = want else { continue };
+        let Desired::Rename(to, _) = want else {
+            continue;
+        };
         let dir = entries[order[pos]].dir.as_path();
         if let Some(&other) = vacated.get(&(dir, to.as_str()))
             && other != pos
@@ -1101,8 +1139,8 @@ mod tests {
         let entries = vec![entry("a"), entry("b")];
         let order = vec![0, 1];
         let desired = vec![
-            Desired::Rename("b".to_owned()),
-            Desired::Rename("a".to_owned()),
+            Desired::Rename("b".to_owned(), false),
+            Desired::Rename("a".to_owned(), false),
         ];
         match check_no_sibling_chains(&entries, &order, &desired) {
             Err(PlanError::InternalInconsistency(msg)) => {
@@ -1119,8 +1157,8 @@ mod tests {
         let entries = vec![entry("a"), entry("b")];
         let order = vec![0, 1];
         let desired = vec![
-            Desired::Rename("b".to_owned()),
-            Desired::Rename("c".to_owned()),
+            Desired::Rename("b".to_owned(), false),
+            Desired::Rename("c".to_owned(), false),
         ];
         assert!(matches!(
             check_no_sibling_chains(&entries, &order, &desired),
@@ -1142,14 +1180,16 @@ mod tests {
 
     #[test]
     fn a_limit_too_small_for_any_suffix_yields_a_conflict() {
-        // 1 byte: `a b` and `a c` both reduce to `a`, and `-2` needs 2 bytes
-        // before the stem, so no numbered candidate exists at all.
+        // 1 byte: `a  ` and `a_` both reduce to `a` through stages 7/9/10
+        // alone -- neither one is long enough to reach stage 12 (truncate) at
+        // all, so this collision is an ordinary one, not C-3's. `-2` needs 2
+        // bytes before the stem, so no numbered candidate exists at all.
         let p = Policy {
             separator: '_',
             max_len_bytes: 1,
             max_len_utf16: 1,
         };
-        let entries: Vec<Entry> = ["a b", "a c"].iter().map(|n| entry(n)).collect();
+        let entries: Vec<Entry> = ["a  ", "a_"].iter().map(|n| entry(n)).collect();
         let plan = plan(&entries, &p, OnCollision::Number, VolumeCase::Sensitive).expect("plan");
         assert!(
             plan.items
@@ -1159,7 +1199,34 @@ mod tests {
         for i in &plan.items {
             if matches!(i.resolution, Resolution::Conflict(_)) {
                 assert_eq!(i.from, i.to, "a conflicted item must keep its own name");
+                assert!(!i.truncated, "this collision was never a truncation one");
             }
+        }
+    }
+
+    /// C-3: when a collision exists *because* truncation cut off the bytes
+    /// that told two sources apart, `Number` (the default) must not silently
+    /// renumber it away -- the old behaviour was indistinguishable from an
+    /// ordinary, harmless collision and reported `0 conflicts`. `a b` and
+    /// `a c` both reduce to `a_b` / `a_c` and then truncate to `a` at a
+    /// 1-byte limit; that truncation is what makes them collide.
+    #[test]
+    fn a_collision_caused_by_truncation_is_reported_not_renumbered() {
+        let p = Policy {
+            separator: '_',
+            max_len_bytes: 1,
+            max_len_utf16: 1,
+        };
+        let entries: Vec<Entry> = ["a b", "a c"].iter().map(|n| entry(n)).collect();
+        let plan = plan(&entries, &p, OnCollision::Number, VolumeCase::Sensitive).expect("plan");
+        for i in &plan.items {
+            assert_eq!(
+                i.resolution,
+                Resolution::Conflict(Conflict::TruncationCollision),
+                "{i:?}"
+            );
+            assert_eq!(i.from, i.to, "a conflicted item must keep its own name");
+            assert!(i.truncated, "the conflict came from truncation");
         }
     }
 

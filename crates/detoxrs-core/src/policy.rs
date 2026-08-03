@@ -43,11 +43,15 @@ pub struct Policy {
     /// p.separator = '/'; // cannot assign to private field
     /// ```
     pub(crate) separator: char,
-    /// Maximum name length in UTF-8 bytes. M1 hardcodes 255 (ext4's limit);
-    /// `statfs`-derived per directory from M5.
+    /// Maximum name length in UTF-8 bytes. `Policy::default` hardcodes 255
+    /// (ext4's limit) on non-macOS targets and `usize::MAX` (not this
+    /// platform's constraint, per C-3) on macOS; `statfs`-derived per
+    /// directory from M5.
     pub max_len_bytes: usize,
-    /// Maximum name length in UTF-16 code units. M1 hardcodes 255 (APFS's
-    /// limit, empirically established in doc 06 Test 1).
+    /// Maximum name length in UTF-16 code units. `Policy::default` hardcodes
+    /// 255 (APFS's limit, empirically established in doc 06 Test 1) on
+    /// macOS and `usize::MAX` (not this platform's constraint, per C-3)
+    /// elsewhere.
     pub max_len_utf16: usize,
 }
 
@@ -95,17 +99,53 @@ impl Policy {
 /// M1's hardcoded limit, in both units.
 ///
 /// Both tier-1 platforms are exactly 255 in their own unit (ext4: bytes; APFS:
-/// UTF-16 code units), so this constant is wrong only on filesystems nobody is
-/// running yet, and only in the over-truncating direction. M5 deletes it in the
-/// same commit that adds `statfs` detection.
+/// UTF-16 code units). M5 deletes this constant in the same commit that adds
+/// `statfs` detection.
 pub const M1_MAX_LEN: usize = 255;
+
+/// C-3: applying `M1_MAX_LEN` to *both* fields at once was the bug, not a
+/// stand-in for it. ext4 does not look at UTF-16 units at all, and APFS does
+/// not look at byte count at all -- each platform has exactly one binding
+/// axis. Binding both unconditionally makes the byte cap fire on APFS for any
+/// name with a multi-byte character well inside the filesystem's own 255-unit
+/// limit, which is `Policy::default`'s whole job to not do: turning "clean
+/// this name" into "shorten this name" for a name the filesystem in front of
+/// the user would have accepted untouched, and -- because truncation is not a
+/// conservative direction once two truncated prefixes coincide -- silently
+/// colliding two legal, distinct files into one write.
+///
+/// The default is therefore per-target-OS rather than one number: the axis
+/// that is not the current platform's constraint is set to `usize::MAX`,
+/// which does not weaken the safety closure (`fits` still requires both
+/// fields, and the platform's real limit is still the one enforced) -- it
+/// just stops a limit that was never the filesystem's own from binding first.
+/// M1 has no `statfs`, so `target_os` is the stand-in for "which filesystem
+/// is this" until M5 replaces it with the real probe.
+#[cfg(target_os = "macos")]
+const fn default_max_len_bytes() -> usize {
+    usize::MAX
+}
+#[cfg(not(target_os = "macos"))]
+const fn default_max_len_bytes() -> usize {
+    M1_MAX_LEN
+}
+
+/// See [`default_max_len_bytes`].
+#[cfg(target_os = "macos")]
+const fn default_max_len_utf16() -> usize {
+    M1_MAX_LEN
+}
+#[cfg(not(target_os = "macos"))]
+const fn default_max_len_utf16() -> usize {
+    usize::MAX
+}
 
 impl Default for Policy {
     fn default() -> Self {
         Self {
             separator: '_',
-            max_len_bytes: M1_MAX_LEN,
-            max_len_utf16: M1_MAX_LEN,
+            max_len_bytes: default_max_len_bytes(),
+            max_len_utf16: default_max_len_utf16(),
         }
     }
 }
@@ -118,8 +158,33 @@ mod tests {
     fn default_is_the_m1_shape() {
         let p = Policy::default();
         assert_eq!(p.separator, '_');
-        assert_eq!(p.max_len_bytes, M1_MAX_LEN);
-        assert_eq!(p.max_len_utf16, M1_MAX_LEN);
+        // C-3: only one axis binds by default, and it is the axis this build's
+        // target platform's own filesystem actually cares about. The other
+        // axis is `usize::MAX`, not `M1_MAX_LEN` -- asserting both `== 255` is
+        // exactly the bug this test used to enshrine.
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(p.max_len_bytes, usize::MAX);
+            assert_eq!(p.max_len_utf16, M1_MAX_LEN);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(p.max_len_bytes, M1_MAX_LEN);
+            assert_eq!(p.max_len_utf16, usize::MAX);
+        }
+    }
+
+    /// C-3: the default limit must never let a name through that violates the
+    /// platform's own real limit, even though the *other* axis no longer
+    /// binds. This is the safety half of the fix -- relaxing the axis that
+    /// was never the constraint must not turn into relaxing the axis that is.
+    #[test]
+    fn the_platform_axis_still_binds_by_default() {
+        let p = Policy::default();
+        #[cfg(target_os = "macos")]
+        assert_eq!(p.max_len_utf16, 255);
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(p.max_len_bytes, 255);
     }
 
     #[test]

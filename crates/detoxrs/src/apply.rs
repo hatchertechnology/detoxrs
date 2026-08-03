@@ -415,6 +415,7 @@ mod tests {
             ident: ident(&md),
             depth: 0,
             resolution: Resolution::Rename,
+            truncated: false,
         }
     }
 
