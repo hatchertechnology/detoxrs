@@ -39,7 +39,7 @@ use detoxrs_core::plan::{Plan, PlanError, Resolution, plan};
 use detoxrs_core::policy::Policy;
 use fsops::PlatformRenameOps;
 use std::io::{self, Write as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -48,6 +48,21 @@ fn main() -> ExitCode {
         Ok(code) => ExitCode::from(code),
         Err(msg) => {
             eprintln!("detoxrs: {msg}");
+            // C12: every non-exit-2 path emits a JSON document under --json
+            // (`report::json`), but this one used to short-circuit before any
+            // JSON was written at all, leaving a machine consumer unable to
+            // tell a refusal from a crash even though `--help` promises "JSON
+            // on stdout, diagnostics on stderr" with no carve-out. `undo`'s
+            // subcommand cannot reach here with `args.json` set --
+            // `args_conflicts_with_subcommands` in `cli.rs` forbids combining
+            // them -- so this is only the forward-run refusal paths (a walk,
+            // plan, or output error). `writeln!` rather than `println!`:
+            // the latter panics on a write failure, and a refusal that
+            // itself hits a broken pipe must not turn into a panic.
+            if args.json {
+                let doc = serde_json::json!({ "schema": 1, "error": msg });
+                drop(writeln!(io::stdout(), "{doc}"));
+            }
             ExitCode::from(2)
         }
     }
@@ -130,15 +145,31 @@ fn exec(p: &Plan, policy: &Policy, as_json: bool, quiet: bool) -> Result<u8, Str
         );
     }
 
-    if as_json {
+    let report_result = if as_json {
         report::json(&mut out, p, Some(&s.outcomes))
     } else if quiet {
         Ok(())
     } else {
         report::applied(&mut out, p, &s, Some((&batch, &where_)))
     }
-    .and_then(|()| out.flush())
-    .map_err(|e| format!("cannot write output: {e}"))?;
+    .and_then(|()| out.flush());
+
+    // C6: this used to be `?`, so a broken stdout on the *closing* report
+    // (`detoxrs -x -r . | head -1`) discarded `s.exit_code()` and returned
+    // exit 2 -- the code this file and `--help` both document as "nothing was
+    // attempted at all" -- after real renames had already happened and been
+    // journalled. By the time this write is attempted the batch is over: the
+    // renames it did are done, `apply::run`'s own progress writes are already
+    // fault-tolerant (see the comment in `apply::attempt`'s `Ok` arm), so the
+    // only thing this write failing can mean is that the closing summary
+    // itself did not reach the user. `.max(1)`: a run that otherwise fully
+    // succeeded (`exit_code() == 0`) still has to surface as "something is
+    // wrong" when its own report never arrived, without claiming nothing was
+    // attempted.
+    if let Err(e) = report_result {
+        eprintln!("detoxrs: cannot write output: {e}");
+        return Ok(s.exit_code().max(1));
+    }
 
     Ok(s.exit_code())
 }
@@ -181,10 +212,7 @@ fn undo(u: &cli::Undo) -> Result<u8, String> {
     }
 
     let path = if u.last {
-        batches
-            .last()
-            .cloned()
-            .ok_or_else(|| "no recorded batches to undo".to_owned())?
+        resolve_last(&batches)?
     } else if let Some(id) = &u.batch_id {
         journal::path_of(id).map_err(|e| e.to_string())?
     } else {
@@ -248,6 +276,71 @@ fn undo(u: &cli::Undo) -> Result<u8, String> {
     ));
     drop(out.flush());
     Ok(if suspect { 1 } else { s.exit_code() })
+}
+
+/// What `--last` means: the newest journal that either completed a rename or
+/// has one whose outcome is still unknown, not merely the newest file by
+/// name.
+///
+/// C7 (three routes, one root cause). `batches.last()` used to be the whole
+/// answer, but a journal can exist and sort newest while describing nothing
+/// that needs attention: an all-refused `undo` writes its own journal with
+/// nothing in it; a forward `-x` run in which every item failed writes one
+/// too (its `intent`/`failed` records exist, but nothing was ever `done`);
+/// and a concurrent run's journal has no `done` record yet the instant after
+/// `Journal::create` returns. Any of the three sorting newest silently
+/// shadows the real batch underneath it -- the forward path already carries
+/// this exact reasoning for the empty-plan case (`exec`, above: "an empty
+/// batch would be the newest one, so `undo --last` would stop meaning 'undo
+/// what I just did'"), and this is that same guard, generalized to the place
+/// all three routes actually share: eligibility for `--last`, not any one of
+/// the call sites that can produce an empty journal.
+///
+/// **`items.is_empty()` alone is the wrong test (a real regression a
+/// reviewer caught).** A batch that crashed *before* its first `done` has an
+/// `intent` with no outcome -- `replay.items` is empty exactly like the
+/// all-failed and all-refused cases, but `replay.interrupted` is `Some(..)`:
+/// a real rename whose fate on disk is unknown. Skipping that batch the same
+/// way falls through to an older, already-clean batch, silently reverts
+/// *that* instead, and never mentions the crash at all -- worse than the
+/// pre-fix behaviour, which at least landed on the crashed batch and exited
+/// 1 with a warning. "Recorded work whose outcome is unknown" and "recorded
+/// no work at all" are different states; only the second is skipped here.
+/// A batch is eligible when it has a completed rename *or* an unresolved
+/// one; only all-failed, all-refused and no-op journals -- which have
+/// neither -- are skipped.
+///
+/// A journal that is skipped here is not deleted or hidden -- explicit
+/// `detoxrs undo <BATCH-ID>` still reaches it and reports "nothing to undo in
+/// that batch" exactly as before -- it is only skipped when resolving
+/// *`--last`*, so an older real batch underneath it stays reachable instead
+/// of being permanently shadowed by an empty file that happens to sort after
+/// it.
+///
+/// This also covers the crash-mid-batch case
+/// (`undoing_an_unfinished_batch_warns_and_does_not_report_success`) whether
+/// or not it has a completed rename yet: `undo`'s existing interrupted-item
+/// and no-completion-record warnings fire unconditionally once a batch is
+/// selected, so a still-being-written journal that truly has nothing in it
+/// yet (R6's race) is the only case still skipped -- "not picked at all"
+/// rather than "picked, then warned about" -- while one with a genuine
+/// unresolved item is surfaced, not silently stepped over.
+fn resolve_last(batches: &[PathBuf]) -> Result<PathBuf, String> {
+    for path in batches.iter().rev() {
+        let replay =
+            journal::replay(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        if !replay.items.is_empty() || replay.interrupted.is_some() {
+            return Ok(path.clone());
+        }
+    }
+    // Nothing among them ever completed or interrupted a rename: fall back
+    // to the newest file so the existing empty-batch reporting below still
+    // applies, rather than inventing a new "no batches" message for a
+    // directory that is not actually empty.
+    batches
+        .last()
+        .cloned()
+        .ok_or_else(|| "no recorded batches to undo".to_owned())
 }
 
 /// A plan error as the user should read it.

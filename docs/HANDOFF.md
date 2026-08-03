@@ -57,10 +57,11 @@ previous handoff held; two things came out differently and both are recorded in 
 **One real bug was found by a test, not by review, which keeps the streak intact (seven now).**
 `undo --last` originally mixed the pid into the batch id suffix, so two batches created in the same
 second sorted by a hash rather than by time — and undoing an undo reverted the _original_ batch.
-Caught by `an_undo_can_itself_be_undone`. The suffix is now the subsecond clock scaled to four
-fixed-width hex digits, which is monotonic within a second and sorts lexicographically the way it
-compares numerically. **If you change the journal filename format, that ordering property is what
-you must preserve;** `list()` sorting by name is what `--last` means.
+Caught by `an_undo_can_itself_be_undone`. That subsecond-hex suffix is gone; a later fix (below)
+replaced it with a directory-read sequence number, so batch ids are now `<seq:06>-<UTC-stamp>`
+(e.g. `000001-20260803T184819Z`), monotonic by construction rather than by clock resolution.
+**If you change the journal filename format, that ordering property is what you must preserve;**
+`list()` sorting by name is what `--last` means.
 
 The `kill -9` test (`crash_mid_batch_is_recoverable`) watches the journal rather than the clock:
 it spawns a 1000-item batch, kills the child as soon as five `done` records exist, and then asserts

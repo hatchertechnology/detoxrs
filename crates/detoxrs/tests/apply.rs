@@ -327,6 +327,15 @@ fn a_batch_id_cannot_escape_the_journal_directory() {
 
 /// `-q` is "errors only", and that has to mean the same thing on the write path as
 /// on the read path.
+///
+/// The per-item failure here used to be a pre-existing destination
+/// (`b_file.txt` already on disk), which C9's fix now plans around instead of
+/// failing (see `a_destination_occupied_at_snapshot_time_is_numbered_away`),
+/// so this test switched to a read-only containing directory for the same
+/// reason `undo_last_skips_a_batch_where_every_rename_failed` did: a
+/// deterministic `EACCES` that does not depend on which layer catches a
+/// pre-existing name.
+#[cfg(unix)]
 #[test]
 fn quiet_suppresses_the_applied_report_but_not_errors() {
     let f = Fixture::new();
@@ -345,27 +354,49 @@ fn quiet_suppresses_the_applied_report_but_not_errors() {
     );
 
     // An error still has to arrive, on stderr, where errors go.
-    f.write("b file.txt", b"source");
-    f.write("b_file.txt", b"squatter");
+    f.write("b file.txt", b"x");
+    let mut perms = fs::metadata(f.tree.path()).expect("stat").permissions();
+    let writable = perms.clone();
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        perms.set_mode(0o555);
+    }
+    fs::set_permissions(f.tree.path(), perms).expect("chmod");
+
     let bad = f
         .run()
         .args(["-x", "-q", "b file.txt"])
         .output()
         .expect("runs");
+    fs::set_permissions(f.tree.path(), writable)
+        .expect("chmod back, or the tempdir cannot clean up");
+
     assert_eq!(bad.status.code(), Some(1));
     assert!(bad.stdout.is_empty());
     assert!(!stderr(&bad).is_empty());
 }
 
-/// §8.4's apply-time TOCTOU row, deterministic and with no sleep in it.
+/// C9: a destination that already existed **at snapshot time** must be caught
+/// during planning and numbered away, not passed through preview as "0
+/// conflicts" and then failed at apply time with a false "appeared since the
+/// preview" -- `Screen_Shot.png` was never a race, it predates the walk, and
+/// the walk now `lstat`s the candidate destination and freezes it as an
+/// ordinary snapshot entry so `plan()`'s existing occupancy machinery sees it
+/// with no new I/O layer.
 ///
-/// The race is real rather than simulated: collision layer 2 compares against the
-/// **snapshot**, and naming one file on the command line puts exactly one entry in
-/// that snapshot. `Screen_Shot.png` therefore exists on disk and is invisible to
-/// the planner, which is precisely the state a concurrent writer would create
-/// between the walk and the rename.
+/// This test used to be named
+/// `a_destination_that_appeared_after_the_walk_is_refused` and asserted the
+/// old, incorrect behaviour (a false apply-time race failure) -- that name is
+/// now backwards: the destination in it does not appear after the walk at
+/// all, it is there before the preview even runs, which is exactly C9's
+/// point. The genuine post-walk race (a destination that appears *between*
+/// the walk and the rename) is a different, still-real safety property,
+/// covered by `apply::tests::a_destination_that_appears_after_planning_is_a_fresh_conflict`
+/// in `src/apply.rs`, which drives `apply::run` directly against a real
+/// filesystem with no `walk`/`plan` involved at all so C9's plan-time fix
+/// cannot affect it.
 #[test]
-fn a_destination_that_appeared_after_the_walk_is_refused() {
+fn a_destination_occupied_at_snapshot_time_is_numbered_away() {
     let f = Fixture::new();
     f.write("Screen Shot.png", b"source");
     f.write("Screen_Shot.png", b"squatter");
@@ -376,21 +407,23 @@ fn a_destination_that_appeared_after_the_walk_is_refused() {
         .output()
         .expect("runs");
 
-    assert_eq!(out.status.code(), Some(1), "a per-item failure is exit 1");
-    assert!(
-        stderr(&out).contains("appeared since the preview"),
-        "{}",
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a destination occupied before the walk must be planned around, not failed: {:?}",
         stderr(&out)
     );
     assert_eq!(
         fs::read(f.path("Screen_Shot.png")).expect("read"),
         b"squatter",
-        "the pre-existing file must be byte-identical"
+        "the pre-existing file must be untouched"
     );
     assert_eq!(
-        fs::read(f.path("Screen Shot.png")).expect("read"),
-        b"source"
+        fs::read(f.path("Screen_Shot-2.png")).expect("read"),
+        b"source",
+        "the source must have been renamed onto the next free numbered name"
     );
+    assert!(!f.path("Screen Shot.png").exists());
 }
 
 #[test]
@@ -575,6 +608,221 @@ fn crash_mid_batch_is_recoverable() {
         N,
         "the tree gained or lost an entry"
     );
+}
+
+/// C6: a broken stdout must not report exit 2 -- the code documented as
+/// "nothing was attempted at all" -- after renames have already happened, and
+/// must not truncate the batch.
+///
+/// Reproduces the review's `detoxrs -x -r . | head -1`: read exactly one line
+/// from the child's stdout, then drop the reader so the read end of the pipe
+/// closes. Every later write from the child gets `EPIPE`, exactly as under a
+/// real closed pipe.
+#[test]
+fn a_broken_pipe_does_not_report_exit_2_after_renames_happened() {
+    let f = Fixture::new();
+    for n in 1..=20 {
+        f.write(&format!("k {n}.txt"), b"x");
+    }
+
+    // `assert_cmd::Command` has no `spawn`/piped-stdio surface (it always
+    // collects output for assertion), so this one test uses `std::process`
+    // directly, the same way `assert_cmd::Command::cargo_bin` finds the
+    // binary under the hood.
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_detoxrs"))
+        .current_dir(f.tree.path())
+        .env("XDG_STATE_HOME", f.state.path())
+        .args(["-x", "-r", "."])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+
+    {
+        let stdout = child.stdout.take().expect("piped stdout");
+        let mut reader = std::io::BufReader::new(stdout);
+        let mut line = String::new();
+        std::io::BufRead::read_line(&mut reader, &mut line).expect("read one line");
+        // `reader` (and the pipe's read end) drops here.
+    }
+
+    let status = child.wait().expect("wait");
+    assert_ne!(
+        status.code(),
+        Some(2),
+        "exit 2 means nothing was attempted, but renames already happened"
+    );
+
+    let renamed = (1..=20)
+        .filter(|n| !f.path(&format!("k {n}.txt")).exists())
+        .count();
+    assert_eq!(renamed, 20, "a broken pipe must not truncate the batch");
+}
+
+/// C7 (route: every rename in a batch failed). A journal describing no
+/// completed rename must not become `--last`'s target and shadow the real
+/// batch underneath it.
+///
+/// [`a_destination_that_appeared_after_the_walk_is_refused`]'s technique (a
+/// pre-existing destination) is deliberately *not* reused here:
+/// `detoxrs-core`'s plan layer is under active repair in this same review
+/// round (C8/C9), and which layer catches a pre-existing destination is
+/// exactly what is changing there. A read-only containing directory fails
+/// the rename itself (`EACCES`) with no dependency on collision detection at
+/// any layer, which is the deterministic, per-item, non-aborting failure
+/// §5.8 already specifies and `fsops` already has unit coverage for.
+#[cfg(unix)]
+#[test]
+fn undo_last_skips_a_batch_where_every_rename_failed() {
+    let f = Fixture::new();
+    f.write("a file.txt", b"x");
+    f.run().args(["-x", "a file.txt"]).assert().success();
+    assert_eq!(f.journals().len(), 1, "the real batch");
+
+    f.write("b file.txt", b"x");
+    let mut perms = fs::metadata(f.tree.path()).expect("stat").permissions();
+    let writable = perms.clone();
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        perms.set_mode(0o555); // read + execute, no write: renameat needs write on the dir.
+    }
+    fs::set_permissions(f.tree.path(), perms).expect("chmod");
+
+    let doomed = f.run().args(["-x", "b file.txt"]).output().expect("runs");
+    fs::set_permissions(f.tree.path(), writable)
+        .expect("chmod back, or the tempdir cannot clean up");
+
+    assert_eq!(doomed.status.code(), Some(1), "{:?}", stderr(&doomed));
+    assert_eq!(f.journals().len(), 2, "the doomed run still gets a journal");
+
+    let out = f.run().args(["undo", "--last"]).output().expect("runs");
+    assert_eq!(out.status.code(), Some(0), "{:?}", stderr(&out));
+    assert!(
+        f.path("a file.txt").exists(),
+        "--last must have reverted the real batch, not the empty one on top of it"
+    );
+}
+
+/// C7 regression: a batch that crashed *before* its first `done` has an
+/// `intent` with no outcome -- `replay.items` is empty exactly like the
+/// all-failed and all-refused journals above, but the rename it started is
+/// of genuinely unknown fate on disk (`replay.interrupted` is `Some`). An
+/// eligibility test that only looked at `items.is_empty()` treated this the
+/// same as "nothing happened," fell through to an older, already-clean
+/// batch, silently reverted *that* one, and never mentioned the crash --
+/// worse than never fixing C7 at all, since the pre-fix behaviour at least
+/// landed on the crashed batch and exited 1 with a warning. `--last` is the
+/// post-crash recovery command; it must never report success while a
+/// half-applied rename from a real crash sits unreported underneath it.
+///
+/// The crashed batch is hand-crafted exactly like
+/// `undoing_an_unfinished_batch_warns_and_does_not_report_success` does (a
+/// live run's journal is indistinguishable from one that crashed), but with
+/// no `done` line at all -- the state *before* the first rename completes,
+/// not partway through a batch of several.
+#[test]
+fn undo_last_surfaces_a_crash_instead_of_reverting_an_older_batch() {
+    let f = Fixture::new();
+    // batch 000001: a real, completed rename -- the batch that must stay put.
+    f.write("a file.txt", b"x");
+    f.run().args(["-x", "a file.txt"]).assert().success();
+    assert_eq!(f.journals().len(), 1);
+
+    // batch 000002: crashed before its first `done`. Only an `intent`, no
+    // outcome, no `end`.
+    f.write("other.txt", b"y");
+    let ident = {
+        let md = fs::symlink_metadata(f.path("other.txt")).expect("lstat");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            (md.dev(), md.ino())
+        }
+        #[cfg(not(unix))]
+        {
+            (0_u64, 0_u64)
+        }
+    };
+    let dir = f.state.path().join("detoxrs").join("journal");
+    fs::write(
+        dir.join("000002-20260803T170600Z.jsonl"),
+        format!(
+            "{{\"v\":1,\"batch\":\"000002-20260803T170600Z\"}}\n\
+             {{\"op\":\"intent\",\"dev\":{},\"ino\":{},\"kind\":\"file\",\"dir\":{:?},\"from\":\"other.txt\",\"to\":\"other-renamed.txt\"}}\n",
+            ident.0,
+            ident.1,
+            f.tree.path().to_str().expect("utf8 tempdir"),
+        ),
+    )
+    .expect("write journal");
+    assert_eq!(f.journals().len(), 2);
+
+    let out = f.run().args(["undo", "--last"]).output().expect("runs");
+
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a crashed batch must not be reported as a clean success: {:?}",
+        stderr(&out)
+    );
+    assert!(
+        stderr(&out).contains("interrupted while renaming"),
+        "the crash must be surfaced, not silently stepped over: {}",
+        stderr(&out)
+    );
+    assert!(
+        f.path("a_file.txt").exists(),
+        "the real, older, already-clean batch must not have been reverted instead"
+    );
+}
+
+/// C7 (route: a concurrent run's still-open journal). A journal with no
+/// completed rename yet -- the state a live run's journal is in the instant
+/// after `Journal::create` returns and before its first `intent` -- must be
+/// skipped for `--last`, not picked and then warned about.
+#[test]
+fn undo_last_skips_a_journal_with_no_completed_rename() {
+    let f = Fixture::new();
+    f.write("a file.txt", b"x");
+    f.run().args(["-x", "a file.txt"]).assert().success();
+    assert_eq!(f.journals().len(), 1);
+
+    let dir = f.state.path().join("detoxrs").join("journal");
+    fs::write(
+        dir.join("000002-20260803T170500Z.jsonl"),
+        "{\"v\":1,\"batch\":\"000002-20260803T170500Z\"}\n",
+    )
+    .expect("write journal");
+    assert_eq!(f.journals().len(), 2);
+
+    let out = f.run().args(["undo", "--last"]).output().expect("runs");
+    assert_eq!(out.status.code(), Some(0), "{:?}", stderr(&out));
+    assert!(
+        f.path("a file.txt").exists(),
+        "the real batch underneath the in-progress journal must still be reachable via --last"
+    );
+    assert!(
+        !stderr(&out).contains("no completion record"),
+        "a journal that was correctly skipped for --last must not be warned about: {}",
+        stderr(&out)
+    );
+}
+
+/// C12: `--json` promises "JSON on stdout, diagnostics on stderr" with no
+/// carve-out, but every exit-2 refusal used to write zero bytes to stdout.
+#[test]
+fn json_error_path_still_emits_a_json_document_on_exit_2() {
+    let f = Fixture::new();
+    let out = f
+        .run()
+        .args(["--json", "does-not-exist"])
+        .output()
+        .expect("runs");
+    assert_eq!(out.status.code(), Some(2));
+    let doc: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("stdout must be valid JSON even on refusal");
+    assert_eq!(doc["schema"], 1);
+    assert!(doc["error"].is_string(), "{doc}");
 }
 
 /// One journal record, reduced to the fields these tests read.

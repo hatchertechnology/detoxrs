@@ -323,7 +323,12 @@ pub fn json(w: &mut impl Write, plan: &Plan, outcomes: Option<&[ItemResult]>) ->
 ///
 /// This is the *only* place a name becomes a printable string, and it is display
 /// code — the one place `to_string_lossy`-shaped conversion is permitted, and
-/// even here nothing is lost, because the escapes are reversible.
+/// even here nothing is lost, because the escapes are reversible: a literal `<`
+/// is escaped too (as `<3c>`), so every `<` in the output starts a genuine
+/// escape token and none can originate from the name itself (C10). Without
+/// that, a file named literally `a<0a>b.txt` and one named `a<NEWLINE>b.txt`
+/// rendered identically, which made the mapping lossy in exactly the case the
+/// paragraph above claims it is not.
 #[must_use]
 pub fn escape(name: &OsStr) -> String {
     #[cfg(unix)]
@@ -362,14 +367,25 @@ fn escape_bytes(mut rest: &[u8]) -> String {
     }
 }
 
-/// Escape the control characters in text that is already valid.
+/// Escape the control characters — and the literal `<` — in text that is
+/// already valid.
+///
+/// `<` is not a control character, but every escape produced below is
+/// `<...>`-shaped, so a literal `<` in the name would look exactly like the
+/// start of one and make two distinct names render identically (C10). Escaping
+/// it here too keeps the mapping injective: a `<` can only ever appear in the
+/// output as the start of a genuine escape token. `>` needs no such treatment —
+/// it only becomes ambiguous in combination with a literal `<`, which is now
+/// always escaped away.
 fn escape_text(s: &str) -> String {
-    if !s.chars().any(char::is_control) {
+    if !s.chars().any(|c| c.is_control() || c == '<') {
         return s.to_owned();
     }
     s.chars()
         .map(|c| {
-            if !c.is_control() {
+            if c == '<' {
+                "<3c>".to_owned()
+            } else if !c.is_control() {
                 c.to_string()
             } else if c.is_ascii() {
                 format!("<{:02x}>", c as u32)
@@ -408,5 +424,16 @@ mod tests {
     fn a_run_of_invalid_bytes_escapes_each_one() {
         use std::os::unix::ffi::OsStrExt as _;
         assert_eq!(escape(OsStr::from_bytes(b"\xff\xfe")), "<ff><fe>");
+    }
+
+    /// C10: a real control character and the literal text of its own escape
+    /// sequence must not render the same way. Before the fix both
+    /// `escape(OsStr::new("a\nb.txt"))` and `escape(OsStr::new("a<0a>b.txt"))`
+    /// produced `"a<0a>b.txt"` — two genuinely distinct files, one rendering.
+    #[test]
+    fn distinct_inputs_render_distinctly() {
+        let real_control_char = OsStr::new("a\nb.txt");
+        let literal_escape_text = OsStr::new("a<0a>b.txt");
+        assert_ne!(escape(real_control_char), escape(literal_escape_text));
     }
 }

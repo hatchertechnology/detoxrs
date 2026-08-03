@@ -64,6 +64,13 @@ pub struct Ident {
     pub mtime: SystemTime,
 }
 
+/// A containing directory's identity.
+///
+/// `(dev, ino)`, or a path hash when identity is unavailable (`walk.rs`'s
+/// `dir_ident_of` is the only producer). Named so the collision engine's maps
+/// read as what they key on rather than as an anonymous pair of integers.
+pub type DirIdent = (u64, u64);
+
 /// One frozen directory entry: the input to `plan()`.
 ///
 /// `name` is an `OsString`, not a `String`: a name that is not valid UTF-8 must
@@ -80,6 +87,15 @@ pub struct Entry {
     pub kind: EntryKind,
     /// Identity at walk time.
     pub ident: Ident,
+    /// Identity of `dir` itself: `(dev, ino)`, or a path hash when identity
+    /// is unavailable (never faked; see `walk.rs`'s `dir_ident_of`).
+    ///
+    /// Two arguments that spell the same directory differently -- `.`, an
+    /// empty string, `./x` -- still compare equal here even though `dir`
+    /// does not (C8), which is what lets layer 1's `wants` and layer 2's
+    /// `occupied` see both spellings as one collision universe instead of
+    /// two.
+    pub dir_ident: DirIdent,
     /// Depth below the walk root, carried for the report.
     ///
     /// Ordering does **not** trust this field: it is derived from `dir` instead,
@@ -232,11 +248,17 @@ pub fn plan(
     // Layer 1's count: how many sources want each destination. Only read by the
     // `skip`/`fail` arms; `number` gets the same answer out of the allocator,
     // because the second source to ask for a taken name is told it is taken.
-    let mut wants: HashMap<(&Path, Vec<u8>), usize> = HashMap::new();
+    //
+    // Keyed on `dir_ident`, not on `dir`'s text (C8): two arguments that spell
+    // one directory differently must land in the same bucket, or a collision
+    // between them is invisible to both layers at once.
+    let mut wants: HashMap<(DirIdent, Vec<u8>), usize> = HashMap::new();
     for (pos, want) in desired.iter().enumerate() {
         if let Desired::Rename(text) = want {
-            let dir = entries[order[pos]].dir.as_path();
-            *wants.entry((dir, key_of_text(text, case))).or_insert(0) += 1;
+            let dir_ident = entries[order[pos]].dir_ident;
+            *wants
+                .entry((dir_ident, key_of_text(text, case)))
+                .or_insert(0) += 1;
         }
     }
 
@@ -257,7 +279,7 @@ pub fn plan(
     for (pos, &i) in order.iter().enumerate() {
         allocator
             .occupied
-            .entry((entries[i].dir.as_path(), key_of_os(&entries[i].name, case)))
+            .entry((entries[i].dir_ident, key_of_os(&entries[i].name, case)))
             .or_default()
             .push(pos);
     }
@@ -266,20 +288,20 @@ pub fn plan(
     let mut refused = Vec::new();
     for (pos, &i) in order.iter().enumerate() {
         let e = &entries[i];
-        let dir = e.dir.as_path();
+        let dir_ident = e.dir_ident;
         let (to, resolution) = match &desired[pos] {
             Desired::Keep => (e.name.clone(), Resolution::Unchanged),
             Desired::Skip(reason) => (e.name.clone(), Resolution::Skipped(*reason)),
             Desired::Rename(text) => {
                 let key = key_of_text(text, case);
                 match on_collision {
-                    OnCollision::Number => allocator.take(dir, text, pos).map_or_else(
+                    OnCollision::Number => allocator.take(dir_ident, text, pos).map_or_else(
                         || (e.name.clone(), Resolution::Conflict(Conflict::Unresolvable)),
                         |name| (OsString::from(name), Resolution::Rename),
                     ),
                     OnCollision::Skip | OnCollision::Fail => {
-                        if allocator.is_free(dir, &key, pos) {
-                            if wants.get(&(dir, key)).copied().unwrap_or(0) > 1 {
+                        if allocator.is_free(dir_ident, &key, pos) {
+                            if wants.get(&(dir_ident, key)).copied().unwrap_or(0) > 1 {
                                 (e.name.clone(), Resolution::Conflict(Conflict::IntraBatch))
                             } else {
                                 (OsString::from(text.clone()), Resolution::Rename)
@@ -489,29 +511,36 @@ fn check_no_sibling_chains(
 }
 
 /// Destination allocation: layer 2's occupancy plus this run's own allocations.
-struct Allocator<'a> {
-    /// `(dir, key)` -> the positions of the entries currently holding that name.
-    occupied: HashMap<(&'a Path, Vec<u8>), Vec<usize>>,
-    /// `(dir, key)` already promised to an earlier item in the plan's order.
-    allocated: HashSet<(&'a Path, Vec<u8>)>,
+///
+/// Keyed on `(dir_ident, key)`, not `(dir, key)` (C8): `dir_ident` is the
+/// containing directory's identity, so two arguments that spell one directory
+/// differently still land in the same bucket. This also drops the lifetime a
+/// `&Path` key would need, since `DirIdent` is `Copy`.
+struct Allocator {
+    /// `(dir_ident, key)` -> the positions of the entries currently holding
+    /// that name.
+    occupied: HashMap<(DirIdent, Vec<u8>), Vec<usize>>,
+    /// `(dir_ident, key)` already promised to an earlier item in the plan's
+    /// order.
+    allocated: HashSet<(DirIdent, Vec<u8>)>,
     /// Whether comparison folds case.
     case: VolumeCase,
     /// The length budget every candidate must satisfy.
     limits: Limits,
 }
 
-impl<'a> Allocator<'a> {
+impl Allocator {
     /// Is `key` available to the entry at `owner`?
     ///
     /// An entry's own name is available to itself: that is the NFD -> NFC respell
     /// case (§6.2), where the destination's key equals the source's key but the
     /// bytes on disk change. Reporting that as a conflict would refuse to fix
     /// exactly the normalization mess the tool exists for.
-    fn is_free(&self, dir: &'a Path, key: &[u8], owner: usize) -> bool {
+    fn is_free(&self, dir_ident: DirIdent, key: &[u8], owner: usize) -> bool {
         // The tuple key means one `Vec` per probe. Bounded by the probe ceiling
         // and dwarfed by the syscall it exists to avoid; a nested map would save
         // it and cost more code than it is worth.
-        let k = (dir, key.to_vec());
+        let k = (dir_ident, key.to_vec());
         !self.allocated.contains(&k)
             && self
                 .occupied
@@ -523,10 +552,10 @@ impl<'a> Allocator<'a> {
     ///
     /// Order matters and is the reason `plan` walks `deterministic_order`: the
     /// first source to ask keeps the unnumbered name.
-    fn take(&mut self, dir: &'a Path, want: &str, owner: usize) -> Option<String> {
+    fn take(&mut self, dir_ident: DirIdent, want: &str, owner: usize) -> Option<String> {
         let key = key_of_text(want, self.case);
-        if self.is_free(dir, &key, owner) {
-            self.allocated.insert((dir, key));
+        if self.is_free(dir_ident, &key, owner) {
+            self.allocated.insert((dir_ident, key));
             return Some(want.to_owned());
         }
         for n in FIRST_NUMBER..=LAST_NUMBER {
@@ -536,8 +565,8 @@ impl<'a> Allocator<'a> {
             // spinning through all of them at a 2-byte limit.
             let candidate = numbered(want, n, &self.limits)?;
             let key = key_of_text(&candidate, self.case);
-            if self.is_free(dir, &key, owner) {
-                self.allocated.insert((dir, key));
+            if self.is_free(dir_ident, &key, owner) {
+                self.allocated.insert((dir_ident, key));
                 return Some(candidate);
             }
         }
@@ -601,6 +630,7 @@ mod tests {
                 nlink: 1,
                 mtime: SystemTime::UNIX_EPOCH,
             },
+            dir_ident: (1, 1),
             depth: 1,
         }
     }
@@ -888,6 +918,7 @@ mod tests {
         parent.kind = EntryKind::Dir;
         let mut child = entry("c d.txt");
         child.dir = dir().join("a b");
+        child.dir_ident = (1, 2); // a different directory than `dir()`
         child.depth = 2;
         let p = plan(
             &[parent, child],

@@ -17,7 +17,8 @@
 mod support;
 
 use detoxrs_core::plan::{
-    Entry, EntryKind, Ident, OnCollision, Plan, PlanError, PlanItem, Resolution, VolumeCase, plan,
+    DirIdent, Entry, EntryKind, Ident, OnCollision, Plan, PlanError, PlanItem, Resolution,
+    VolumeCase, plan,
 };
 use detoxrs_core::policy::Policy;
 use proptest::prelude::*;
@@ -136,6 +137,18 @@ const fn ident(ino: u64) -> Ident {
     }
 }
 
+/// A directory identity for a fixture that has no real filesystem behind it:
+/// deterministic per `dir`, so two entries built with the same `dir` compare
+/// equal and two different `dir`s (almost certainly) do not -- the same
+/// contract `walk.rs`'s real `dir_ident_of` gives `plan()`, without needing an
+/// actual filesystem to probe.
+fn dir_ident(dir: &Path) -> DirIdent {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    dir.hash(&mut h);
+    (1, h.finish())
+}
+
 /// A three-level snapshot whose two intermediate directories have names that
 /// `transform` will change, so Order safety is exercised rather than trivially
 /// satisfied by clean directory names.
@@ -168,6 +181,7 @@ fn build_snapshot(root: &[String], mid: &[String], deep: &[String]) -> Vec<Entry
             name: os,
             kind,
             ident: ident(ino),
+            dir_ident: dir_ident(dir),
             depth: u32::try_from(dir.components().count()).unwrap_or(u32::MAX),
         });
     };
@@ -204,6 +218,18 @@ fn planned(entries: &[Entry], p: &Policy, oc: OnCollision, case: VolumeCase) -> 
 }
 
 proptest! {
+    // Fixed seed (§5's finding): unseeded, a mutation only some generated
+    // inputs expose gets a non-deterministic verdict -- the review measured
+    // one killed 7 times in 12 runs. A fixed seed makes a green run mean the
+    // same thing on the next run, which is what a mutation-tested module
+    // needs; the case count stays at proptest's own default (256) rather than
+    // growing, since determinism, not volume, was the gap.
+    #![proptest_config(ProptestConfig {
+        cases: 256,
+        rng_seed: proptest::test_runner::RngSeed::Fixed(0x6465_746f_7872_7331),
+        ..ProptestConfig::default()
+    })]
+
     /// **No collision.** The `Rename` items have pairwise-distinct
     /// `(dir, NFC(casefold?(to)))`. The executable form of the maintainer's #130
     /// objection: this is the check that stops N files collapsing into 1.
@@ -373,6 +399,7 @@ fn numbering_follows_nfc_order_not_input_order() {
         name: OsString::from(name),
         kind: EntryKind::File,
         ident: ident(ino),
+        dir_ident: (1, 1),
         depth: 1,
     };
     // Both transform to `a_b.txt`. "a  b.txt" sorts first by NFC bytes (space <
@@ -411,6 +438,7 @@ fn the_corpus_plans_without_a_collision() {
             name: os_string(&e.bytes),
             kind: EntryKind::File,
             ident: ident(n as u64),
+            dir_ident: (1, 1),
             depth: 1,
         })
         .collect();

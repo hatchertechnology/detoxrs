@@ -22,11 +22,8 @@ use proptest::prelude::*;
 /// bites makes the Length-bound property vacuous, which is the failure mode risk
 /// 9 watches.
 pub fn policy_strategy() -> impl Strategy<Value = Policy> {
-    (1usize..=300, 1usize..=300).prop_map(|(bytes, utf16)| Policy {
-        separator: '_',
-        max_len_bytes: bytes,
-        max_len_utf16: utf16,
-    })
+    (1usize..=300, 1usize..=300)
+        .prop_map(|(bytes, utf16)| Policy::new('_', bytes, utf16).expect("'_' is Keep-class"))
 }
 
 /// The default (M1, 255/255) policy plus generated ones, for properties that
@@ -34,7 +31,7 @@ pub fn policy_strategy() -> impl Strategy<Value = Policy> {
 pub fn policy_or_default() -> impl Strategy<Value = Policy> {
     prop_oneof![
         1 => Just(Policy::default()),
-        1 => Just(Policy { separator: '_', max_len_bytes: M1_MAX_LEN, max_len_utf16: M1_MAX_LEN }),
+        1 => Just(Policy::new('_', M1_MAX_LEN, M1_MAX_LEN).expect("'_' is Keep-class")),
         4 => policy_strategy(),
     ]
 }

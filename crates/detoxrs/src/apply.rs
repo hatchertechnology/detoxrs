@@ -207,13 +207,25 @@ fn attempt(
             // rename happened, and `undo` treats an intent with no outcome as
             // the interrupted item, which is exactly the right reading.
             drop(journal.done(item));
-            writeln!(
+            // C6: this used to be `Fail::Batch` on write error, which turned a
+            // broken stdout (`detoxrs -x -r . | head -1`) into an aborted batch
+            // reported as exit 2 -- the code `main.rs` and `--help` both
+            // document as "nothing was attempted at all" -- after renames had
+            // already happened. The rename above is done and durably
+            // journalled; a reader that stopped listening to the progress
+            // line is not a reason to call this item failed, nor to stop
+            // attempting the rest of a batch the user explicitly asked for.
+            // So the write result is dropped, same as `done`'s: the *closing*
+            // summary write in `main.rs::exec` is where a broken pipe still
+            // has to be visible, because that write is the only remaining
+            // place the caller learns the batch's outcome at all.
+            drop(writeln!(
                 out,
                 "{}  ->  {}",
                 escape(item.dir.join(&item.from).as_os_str()),
                 escape(item.to.as_os_str())
-            )
-            .map_err(|e| Fail::Batch(format!("cannot write output: {e}")))
+            ));
+            Ok(())
         }
         Err(e) => {
             drop(journal.failed(item, e));
@@ -340,6 +352,55 @@ mod tests {
         }
         fn failed(&mut self, _i: &PlanItem, _w: RenameErr) -> std::io::Result<()> {
             self.0.borrow_mut().push("failed".to_owned());
+            Ok(())
+        }
+    }
+
+    /// Counts `open()` calls, delegating everything else to the real
+    /// implementation. This is C4's guard: `fsops::tests` pins a `Dir` the
+    /// *test* creates and asserts a property of `fsops` alone, so it
+    /// structurally cannot see `apply::attempt` acquiring a second handle --
+    /// which is where the original defect (`docs/HANDOFF.md`'s "worst finding
+    /// of the previous pass") actually lived. An adversarial review proved
+    /// that guard blind by adding one line to `apply.rs` that re-opens
+    /// `item.dir` right before the rename, reinstating the original defect
+    /// with `cargo test` fully green; the reinstated line only showed up as
+    /// an occasional wrong-file rename under an active directory-swap race
+    /// (5/30 iterations, 14 false journal successes). This double sits at the
+    /// layer the defect lived in and turns "sometimes, under a race" into
+    /// "every single time, no race required": one pinned directory means
+    /// exactly one `open()` per item, and a regression that resolves it a
+    /// second time is a wrong count, not a wrong rename that might get lucky.
+    #[derive(Default)]
+    struct CountingOps {
+        opens: RefCell<u32>,
+    }
+
+    impl RenameOps for CountingOps {
+        fn open(&self, dir: &Path) -> Result<Dir, RenameErr> {
+            *self.opens.borrow_mut() += 1;
+            PlatformRenameOps.open(dir)
+        }
+        fn ident_at(&self, dir: &Dir, name: &OsStr) -> Result<Ident, RenameErr> {
+            PlatformRenameOps.ident_at(dir, name)
+        }
+        fn rename_noreplace(&self, dir: &Dir, from: &OsStr, to: &OsStr) -> Result<(), RenameErr> {
+            PlatformRenameOps.rename_noreplace(dir, from, to)
+        }
+    }
+
+    /// A writer whose every write fails, standing in for a closed stdout pipe
+    /// (`detoxrs -x -r . | head -1`) without needing a real subprocess.
+    struct FailingWriter;
+
+    impl std::io::Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "broken pipe",
+            ))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
     }
@@ -672,5 +733,68 @@ mod tests {
             b"different",
             "the file something else put there must be untouched"
         );
+    }
+
+    /// C4's regression guard, at the layer the defect actually lived in.
+    ///
+    /// Verified against the actual defect, not just written and trusted: with
+    /// `attempt` given one extra `ops.open(&item.dir)` right before the
+    /// rename call -- the exact one-line reinstatement an adversarial review
+    /// used to bring the original "worst finding" defect back with the suite
+    /// green -- this test fails every time (`opens == 2`), no race needed.
+    /// Removing that line restores the pass. Both checked by hand while
+    /// writing this test; left as this comment because the check itself
+    /// cannot run twice in one binary.
+    #[test]
+    fn attempt_opens_the_directory_exactly_once_per_item() {
+        let t = tempfile::tempdir().expect("tempdir");
+        fs::write(t.path().join("a b.txt"), b"x").expect("write");
+        let items = vec![item(t.path(), "a b.txt", "a_b.txt")];
+
+        let ops = CountingOps::default();
+        let s = run(&items, &ops, &mut FakeJournal::default(), &mut Vec::new());
+
+        assert_eq!(s.renamed, 1);
+        assert_eq!(
+            *ops.opens.borrow(),
+            1,
+            "attempt must pin the directory once and reuse that one handle for \
+             the identity check, the occupancy check and the rename -- a second \
+             `open()` call is exactly the regression an adversarial review \
+             reproduced as a wrong-file rename with a falsely successful \
+             journal record"
+        );
+    }
+
+    /// C6: a progress line that cannot be written must not be reported as a
+    /// failed rename, and must not stop the rest of the batch. The rename
+    /// already happened and is already durably journalled by the time this
+    /// write is attempted; the item has already succeeded.
+    #[test]
+    fn a_progress_write_failure_does_not_fail_the_item_or_abort_the_batch() {
+        let t = tempfile::tempdir().expect("tempdir");
+        for n in ["a 1.txt", "a 2.txt"] {
+            fs::write(t.path().join(n), b"x").expect("write");
+        }
+        let items = vec![
+            item(t.path(), "a 1.txt", "a_1.txt"),
+            item(t.path(), "a 2.txt", "a_2.txt"),
+        ];
+
+        let s = run(
+            &items,
+            &PlatformRenameOps,
+            &mut FakeJournal::default(),
+            &mut FailingWriter,
+        );
+
+        assert_eq!(
+            s.renamed, 2,
+            "a broken progress pipe must not be reported as a failed rename"
+        );
+        assert_eq!(s.failed, 0);
+        assert!(s.aborted.is_none());
+        assert!(t.path().join("a_1.txt").exists());
+        assert!(t.path().join("a_2.txt").exists());
     }
 }

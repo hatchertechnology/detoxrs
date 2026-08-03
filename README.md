@@ -3,13 +3,29 @@
 Tames problematic filenames.
 
 Point it at a file or a directory tree and get sane, unix-safe names back:
-spaces and shell metacharacters replaced, percent-escapes decoded, invisible
-and bidirectional control characters stripped, overlong names truncated on
-grapheme boundaries. Preview by default; nothing is renamed until you ask.
+spaces and shell metacharacters replaced, invisible and bidirectional control
+characters stripped, overlong names truncated on grapheme boundaries. Preview
+by default; nothing is renamed until you ask.
 
-> **Status: pre-implementation.** The design is documented in
-> [`docs/research/`](./docs/research/) and the project scaffolding is in place,
-> but the tool does not do anything yet. `main.rs` is a placeholder.
+> **Status: M1 complete.** Preview, `-x` to apply, the undo journal and `undo`
+> all work end to end, on both real filesystems detox users care about (ext4,
+> APFS). This is not yet a finished tool: an independent adversarial review of
+> M1 found fifteen defects (several high-severity) that are being worked
+> through, and later milestones (`docs/plans/unified-draft-plan.md`) still owe
+> percent-escape decoding, config-file rules, reserved-name handling and a
+> `--separator` flag. Treat it as a working preview, not a hardened release.
+
+## Usage
+
+```sh
+detoxrs path...          # preview only; nothing is renamed
+detoxrs -x path...       # rename, and write an undo journal
+detoxrs undo <batch-id>  # revert one batch
+detoxrs undo --last      # revert the most recent batch
+```
+
+Add `-r` to recurse into directories and `--json` for a machine-readable
+report. Run `detoxrs --help` for the full flag list.
 
 ## Acknowledgments
 

@@ -184,7 +184,7 @@ impl Journal {
             "batch": self.id,
             // Verbatim rather than digested: see the module docs.
             "policy": {
-                "separator": policy.separator.to_string(),
+                "separator": policy.separator().to_string(),
                 "max_len_bytes": policy.max_len_bytes,
                 "max_len_utf16": policy.max_len_utf16,
             },
@@ -310,16 +310,38 @@ pub struct Replay {
 /// append-only and a crash can cut it mid-write -- so it is ignored. Anything else
 /// that does not add up goes in [`Replay::anomalies`] and is reported to the user.
 ///
+/// **C2: read as bytes, decode per line.** `fs::read_to_string` fails the
+/// *whole* read on one invalid UTF-8 byte anywhere in the file, which turns
+/// one flipped bit into an unrecoverable batch even though every other line
+/// is perfectly good JSON. This file also legitimately carries non-UTF-8
+/// bytes -- an undecodable directory path is written as `dir_bytes` (see the
+/// module docs) -- so the file was never guaranteed to be valid UTF-8 as a
+/// whole in the first place; treating it as one big `str` was always the odd
+/// choice, not the safe one. Splitting on `\n` at the byte level first and
+/// decoding one line at a time gives a bad byte the same per-line fault
+/// tolerance a JSON syntax error already gets, below.
+///
 /// # Errors
 ///
 /// Any failure to open or read the file.
 pub fn replay(path: &Path) -> io::Result<Replay> {
     let mut out = Replay::default();
     let mut pending: Option<(u64, UndoItem)> = None;
-    let text = fs::read_to_string(path)?;
-    let lines: Vec<&str> = text.lines().collect();
+    let bytes = fs::read(path)?;
+    let lines = split_lines(&bytes);
 
     for (n, line) in lines.iter().enumerate() {
+        let Ok(line) = std::str::from_utf8(line) else {
+            // Same tolerance as a JSON syntax error, and for the same reason:
+            // only the last line can legitimately be half-written (a crash
+            // mid-write can cut a multi-byte UTF-8 sequence in half, not just
+            // a JSON token), so only report it when it is *not* the last line.
+            if n + 1 < lines.len() {
+                out.anomalies
+                    .push(format!("line {} is not valid UTF-8 and was ignored", n + 1));
+            }
+            continue;
+        };
         let Ok(rec) = serde_json::from_str::<Value>(line) else {
             // Only the last line can legitimately be half-written.
             if n + 1 < lines.len() {
@@ -339,12 +361,8 @@ pub fn replay(path: &Path) -> io::Result<Replay> {
                     ));
                 }
                 match parse_intent(&rec) {
-                    Some(item) => pending = Some((item.ident.ino, item)),
-                    None => out.anomalies.push(format!(
-                        "line {} is an intent record missing a field it needs; the item it \
-                         describes cannot be undone",
-                        n + 1
-                    )),
+                    Ok(item) => pending = Some((item.ident.ino, item)),
+                    Err(reason) => out.anomalies.push(format!("line {} {reason}", n + 1)),
                 }
             }
             Some(op @ ("done" | "failed")) => {
@@ -380,16 +398,107 @@ pub fn replay(path: &Path) -> io::Result<Replay> {
     Ok(out)
 }
 
-/// One `intent` record as an undoable item, or `None` if it is missing a field it
-/// needs. The caller records that as an anomaly rather than skipping it quietly.
-fn parse_intent(rec: &Value) -> Option<UndoItem> {
-    Some(UndoItem {
-        dir: PathBuf::from(get_os(rec, "dir")?),
-        current: get_os(rec, "to")?,
-        original: get_os(rec, "from")?,
+/// Split raw journal bytes into lines the way [`str::lines`] would, minus the
+/// UTF-8 requirement: split on `\n`, and drop the one phantom empty element a
+/// byte-level split leaves behind when the file ends with a newline (every
+/// well-formed line does). An empty file has no lines, matching `"".lines()`.
+///
+/// This exists so [`replay`] can decode each line's UTF-8 independently
+/// instead of requiring the whole file to be valid UTF-8 at once (C2) --
+/// `\r\n` is not special-cased because this file is never written with `\r`.
+fn split_lines(bytes: &[u8]) -> Vec<&[u8]> {
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+    let mut lines: Vec<&[u8]> = bytes.split(|&b| b == b'\n').collect();
+    if lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+    lines
+}
+
+/// True when `name` is usable as a single, ordinary path component: not empty,
+/// not `.` or `..`, and free of either flavour of path separator.
+///
+/// `Path::components()` only recognises the *host* platform's separator, so on
+/// Unix a name containing `\` still parses as one `Normal` component; checked
+/// for explicitly here, byte-wise, because a journal is portable text that can
+/// be replayed on a different platform than the one that wrote it (C1).
+fn is_plain_basename(name: &OsStr) -> bool {
+    let bytes = name.as_encoded_bytes();
+    !bytes.is_empty()
+        && bytes != b"."
+        && bytes != b".."
+        && !bytes.contains(&b'/')
+        && !bytes.contains(&b'\\')
+}
+
+/// One `intent` record as an undoable item, or the reason it must be treated
+/// as an anomaly instead. The caller records that reason rather than skipping
+/// the line quietly.
+///
+/// **C1: this is where a journal record stops being trusted.** `from`/`to`
+/// become the arguments to `statat`/`renameat` at replay time
+/// (`apply.rs::attempt`), relative to the `dir` handle pinned in step 0. Those
+/// syscalls take a *path*, not a name: a `from`/`to` containing `..` walks back
+/// out of that handle, and an absolute one makes the kernel ignore the handle
+/// entirely — either way `undo` reports a normal-looking revert while moving a
+/// file outside the directory the dirfd pin exists to confine it to.
+/// `journal::path_of` already treats the batch **id** as untrusted input for
+/// exactly this reason ("a trust boundary is a trust boundary"); a record's
+/// *contents* are equally untrusted — a shared or attacker-influenced
+/// `XDG_STATE_HOME`, or a hand-edited journal, can put anything in this JSON —
+/// so `from`/`to` are rejected outright unless each is a single plain
+/// basename. This is refuse-not-sanitize on purpose: silently stripping `..`
+/// would still let a crafted record rename to an attacker-chosen name, just a
+/// differently-shaped one.
+///
+/// `dir` gets a different check. `Journal::intent` always writes it through
+/// `absolute()` (above), so a well-formed record's `dir` is already absolute;
+/// nothing downstream joins `dir` onto anything else before opening it
+/// (`apply.rs::attempt` step 0 is `ops.open(&item.dir)` directly) — it *is* the
+/// anchor, not a path appended to one — so there is no further component to
+/// walk out of and no basename restriction to apply. Requiring "absolute" is
+/// therefore both consistent with what this file always writes and sufficient
+/// to catch a hand-edited or corrupted record: a relative `dir` would open
+/// relative to whatever directory the `undo` process happens to be run from,
+/// which is never what a journal line means.
+fn parse_intent(rec: &Value) -> Result<UndoItem, &'static str> {
+    const MISSING: &str = "is an intent record missing a field it needs; the item it describes \
+                            cannot be undone";
+
+    let dir = get_os(rec, "dir").ok_or(MISSING)?;
+    let from = get_os(rec, "from").ok_or(MISSING)?;
+    let to = get_os(rec, "to").ok_or(MISSING)?;
+    let dev = rec.get("dev").and_then(Value::as_u64).ok_or(MISSING)?;
+    let ino = rec.get("ino").and_then(Value::as_u64).ok_or(MISSING)?;
+
+    if !is_plain_basename(&from) {
+        return Err(
+            "has a 'from' that is not a plain filename (a path separator, `.`, `..`, or empty); \
+             refusing rather than risking a rename outside the pinned directory",
+        );
+    }
+    if !is_plain_basename(&to) {
+        return Err(
+            "has a 'to' that is not a plain filename (a path separator, `.`, `..`, or empty); \
+             refusing rather than risking a rename outside the pinned directory",
+        );
+    }
+    if !Path::new(&dir).is_absolute() {
+        return Err(
+            "has a 'dir' that is not an absolute path; refusing rather than opening an \
+             unknown location",
+        );
+    }
+
+    Ok(UndoItem {
+        dir: PathBuf::from(dir),
+        current: to,
+        original: from,
         ident: Ident {
-            dev: rec.get("dev")?.as_u64()?,
-            ino: rec.get("ino")?.as_u64()?,
+            dev,
+            ino,
             // Neither is used by the identity recheck, which compares
             // `(dev, ino)` only: a rename leaves mtime alone, so requiring it to
             // match would add nothing, and requiring nlink to match would refuse
@@ -445,7 +554,7 @@ pub fn path_of(id: &str) -> io::Result<PathBuf> {
     if id.is_empty() || id.contains('/') || id.contains('\\') || id.contains("..") {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("{id:?} is not a batch id; ids look like 20260801T142233Z-a91c"),
+            format!("{id:?} is not a batch id; ids look like 000001-20260803T184819Z"),
         ));
     }
     Ok(journal_dir()?.join(format!("{id}.jsonl")))
@@ -589,10 +698,176 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{civil_from_days, get_os, put_os, utc_stamp};
+    use super::{civil_from_days, get_os, put_os, replay, utc_stamp};
     use serde_json::json;
     use std::ffi::OsStr;
     use std::time::{Duration, UNIX_EPOCH};
+
+    /// A [`super::JournalWrite`] that records nothing, for tests that only care
+    /// about what ends up on disk, not about the undo-of-the-undo journal.
+    struct NullJournal;
+    impl super::JournalWrite for NullJournal {
+        fn intent(&mut self, _item: &detoxrs_core::plan::PlanItem) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn done(&mut self, _item: &detoxrs_core::plan::PlanItem) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn failed(
+            &mut self,
+            _item: &detoxrs_core::plan::PlanItem,
+            _why: super::RenameErr,
+        ) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// C1. A forged journal with a relative-traversal record (`from`:
+    /// `"../../ESCAPED.txt"`) and an absolute-path record, alongside one
+    /// legitimate record, replayed and then actually run through `apply::undo`
+    /// with the real platform rename ops -- on a real temporary tree, not a
+    /// fake `RenameOps`, so nothing here can pass by construction.
+    ///
+    /// Before the fix, `parse_intent` copied `from`/`to` verbatim into the
+    /// `UndoItem`, both escape records became ordinary items, and `apply::undo`
+    /// (which only ever re-checks *identity*, never confinement) renamed the
+    /// pinned directory's `victim2.txt`/`victim3.txt` straight to
+    /// `../../ESCAPED.txt` and to an absolute path outside the tree entirely --
+    /// exit 0, reported as a normal revert. The assertions below are on the
+    /// filesystem after the real apply loop has run, not on `replay`'s own
+    /// output, so a change that satisfies `replay` alone without actually
+    /// stopping the rename would still be caught here.
+    #[test]
+    fn undo_refuses_a_traversal_record_instead_of_escaping_the_pinned_directory() {
+        use crate::apply;
+        use crate::fsops::PlatformRenameOps;
+        use std::fs;
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt as _;
+
+        let base = tempfile::tempdir().expect("tempdir");
+        let inner = base.path().join("exp").join("inner");
+        fs::create_dir_all(&inner).expect("mkdir -p exp/inner");
+
+        fs::write(inner.join("victim1.txt"), b"legit").expect("write victim1");
+        fs::write(inner.join("victim2.txt"), b"must not move").expect("write victim2");
+        fs::write(inner.join("victim3.txt"), b"must not move either").expect("write victim3");
+        let meta1 = fs::metadata(inner.join("victim1.txt")).expect("stat victim1");
+
+        // ".." from `inner` is `exp`; ".." again is `base` -- two levels out.
+        let rel_escape_target = base.path().join("ESCAPED.txt");
+        let abs_escape_target = base.path().join("ABS_ESCAPED.txt");
+
+        let records = [
+            // The one legitimate record: undo should really revert this.
+            json!({
+                "op": "intent", "dev": meta1.dev(), "ino": meta1.ino(), "kind": "file",
+                "mtime": 0, "dir": inner.to_str().unwrap(),
+                "from": "original.txt", "to": "victim1.txt",
+            }),
+            json!({ "op": "done", "ino": meta1.ino() }),
+            // Relative traversal.
+            json!({
+                "op": "intent", "dev": 999, "ino": 999, "kind": "file", "mtime": 0,
+                "dir": inner.to_str().unwrap(),
+                "from": "../../ESCAPED.txt", "to": "victim2.txt",
+            }),
+            json!({ "op": "done", "ino": 999 }),
+            // Absolute path, ignoring the dirfd pin altogether.
+            json!({
+                "op": "intent", "dev": 998, "ino": 998, "kind": "file", "mtime": 0,
+                "dir": inner.to_str().unwrap(),
+                "from": abs_escape_target.to_str().unwrap(), "to": "victim3.txt",
+            }),
+            json!({ "op": "done", "ino": 998 }),
+            json!({ "op": "end" }),
+        ];
+        let mut text = String::new();
+        for r in &records {
+            text.push_str(&r.to_string());
+            text.push('\n');
+        }
+        let journal_path = base.path().join("forged.jsonl");
+        fs::write(&journal_path, text).expect("write journal");
+
+        let replayed = replay(&journal_path).expect("a well-formed journal always reads");
+        // Both escape attempts must be refused before they ever become an
+        // `UndoItem`, only the legitimate record survives to `items`.
+        assert_eq!(
+            replayed.items.len(),
+            1,
+            "escape records must not reach the apply loop: {:?}",
+            replayed.anomalies
+        );
+
+        let mut journal = NullJournal;
+        let mut out = Vec::new();
+        let _ = apply::undo(&replayed.items, &PlatformRenameOps, &mut journal, &mut out);
+
+        // The legitimate item really was reverted...
+        assert!(!inner.join("victim1.txt").exists());
+        assert!(inner.join("original.txt").exists());
+        // ...and neither escape attempt touched the filesystem, inside the
+        // pinned directory or out. This is the load-bearing assertion: it is
+        // on disk, derived from nothing the code under test reports about
+        // itself.
+        assert!(
+            !rel_escape_target.exists(),
+            "a relative-traversal record must not create {rel_escape_target:?}"
+        );
+        assert!(
+            !abs_escape_target.exists(),
+            "an absolute-path record must not create {abs_escape_target:?}"
+        );
+        assert!(inner.join("victim2.txt").exists(), "victim2.txt untouched");
+        assert!(inner.join("victim3.txt").exists(), "victim3.txt untouched");
+    }
+
+    /// C2. One invalid UTF-8 byte in the middle of an otherwise-good journal
+    /// must cost exactly that line, not the whole file. Before the fix,
+    /// `replay` read the file with `fs::read_to_string`, which fails the whole
+    /// read on this byte, so the two good renames either side of it became
+    /// unrecoverable too (`exit 2`, nothing reported).
+    #[test]
+    fn replay_recovers_lines_around_one_invalid_utf8_byte() {
+        use std::fs;
+
+        let base = tempfile::tempdir().expect("tempdir");
+        let path = base.path().join("j.jsonl");
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(
+            br#"{"op":"intent","dev":1,"ino":1,"kind":"file","mtime":0,"dir":"/tmp/x","from":"a.txt","to":"a2.txt"}"#,
+        );
+        bytes.push(b'\n');
+        bytes.extend_from_slice(br#"{"op":"done","ino":1}"#);
+        bytes.push(b'\n');
+        // Not valid UTF-8 at all -- `fs::read_to_string` fails the whole file
+        // on this line; `fs::read` plus a per-line decode must not.
+        bytes.extend_from_slice(&[0xFF, 0xFE, b'g', b'a', b'r', b'b', b'a', b'g', b'e']);
+        bytes.push(b'\n');
+        bytes.extend_from_slice(
+            br#"{"op":"intent","dev":2,"ino":2,"kind":"file","mtime":0,"dir":"/tmp/x","from":"b.txt","to":"b2.txt"}"#,
+        );
+        bytes.push(b'\n');
+        bytes.extend_from_slice(br#"{"op":"done","ino":2}"#);
+        bytes.push(b'\n');
+        bytes.extend_from_slice(br#"{"op":"end"}"#);
+        bytes.push(b'\n');
+        fs::write(&path, &bytes).expect("write journal");
+
+        let replayed =
+            replay(&path).expect("one bad byte must not fail the whole read -- that is C2");
+        assert_eq!(replayed.items.len(), 2, "{:?}", replayed.anomalies);
+        assert!(
+            replayed
+                .anomalies
+                .iter()
+                .any(|a| a.contains("not valid UTF-8")),
+            "{:?}",
+            replayed.anomalies
+        );
+    }
 
     /// The one thing in this file that is arithmetic rather than I/O, so the one
     /// thing that can be wrong silently. Leap day, century non-leap, and the

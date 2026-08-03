@@ -183,8 +183,22 @@ impl RenameOps for PlatformRenameOps {
         }
         match unix::renameat_noreplace(&dir.fd, from, to) {
             Ok(()) => Ok(()),
-            // §5.4's two observed-error rungs, in order of specificity.
-            Err(RenameErr::AlreadyExists) if fallback::same_inode(self, dir, from, to) => {
+            // §5.4's two observed-error rungs, in order of specificity. The
+            // guard is `is_same_entry_not_hardlink`, not `same_inode`: a
+            // second hardlink to the source also shares its inode, and a
+            // plain rename over two names for one file is a POSIX no-op that
+            // still returns `Ok(())`. Falling through to it for a hardlink
+            // reported `1 renamed` for nothing renamed (C5). What tells a
+            // genuine case-only/NFD-NFC respell -- `to` is only reachable by
+            // the filesystem's own case/normalization folding, never a
+            // literal entry of its own -- apart from a hardlink -- `to` *is*
+            // a literal entry, sitting on top of `from`'s inode -- is
+            // re-reading `dir`'s own entries, not the inode's volume-wide
+            // `nlink` (which a respell of an otherwise-hardlinked file would
+            // fail).
+            Err(RenameErr::AlreadyExists)
+                if fallback::is_same_entry_not_hardlink(self, dir, from, to) =>
+            {
                 fallback::warn_same_inode_once();
                 unix::renameat_plain(&dir.fd, from, to)
             }
@@ -375,6 +389,72 @@ mod tests {
             )
             .expect("a case-only respell is one syscall, not a collision");
         assert_eq!(fs::read(t.path().join("case.txt")).expect("read"), b"x");
+    }
+
+    /// C5, reproduced exactly as the adversarial review found it: `ln 'a b.txt'
+    /// 'a_b.txt'` then `detoxrs -x 'a b.txt'`. The destination is a second,
+    /// distinct hardlink to the source's own inode, not the case-only respell
+    /// rung 1 exists for. Before the fix, `same_inode` could not tell the two
+    /// apart, so the rung ran a plain `renameat` over two names for one file --
+    /// a POSIX no-op that still returns `Ok(())` -- and the caller saw success
+    /// for a rename that renamed nothing. Asserted on the filesystem, not on a
+    /// value the code under test produced: both names, and the data under them,
+    /// must be exactly what they were before the call.
+    #[cfg(unix)]
+    #[test]
+    fn a_hardlinked_destination_is_a_conflict_not_a_false_success() {
+        use std::os::unix::fs::MetadataExt as _;
+        let t = tempfile::tempdir().expect("tempdir");
+        fs::write(t.path().join("a b.txt"), b"CONTENT").expect("write");
+        fs::hard_link(t.path().join("a b.txt"), t.path().join("a_b.txt")).expect("link");
+
+        let err = PlatformRenameOps
+            .rename_noreplace(&pin(t.path()), OsStr::new("a b.txt"), OsStr::new("a_b.txt"))
+            .expect_err(
+                "a second hardlink to the same file is an occupied destination, not a no-op \
+                 success",
+            );
+        assert_eq!(err, RenameErr::AlreadyExists);
+
+        assert!(
+            t.path().join("a b.txt").exists(),
+            "the source name vanished"
+        );
+        assert!(
+            t.path().join("a_b.txt").exists(),
+            "the destination name vanished"
+        );
+        assert_eq!(
+            fs::read(t.path().join("a b.txt")).expect("read"),
+            b"CONTENT"
+        );
+        assert_eq!(
+            fs::read(t.path().join("a_b.txt")).expect("read"),
+            b"CONTENT"
+        );
+        assert_eq!(
+            fs::metadata(t.path().join("a b.txt")).expect("stat").ino(),
+            fs::metadata(t.path().join("a_b.txt")).expect("stat").ino(),
+            "still the same hardlinked file, untouched"
+        );
+    }
+
+    /// §5.8's `NameTooLong` variant, driven through the real syscall rather than
+    /// asserted from the `map_errno` table: a destination name past this
+    /// filesystem's `NAME_MAX` (255 bytes on every filesystem this project
+    /// targets) is `ENAMETOOLONG`, not a silent truncation or a different error.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_over_the_filesystem_limit_is_name_too_long() {
+        let t = tempfile::tempdir().expect("tempdir");
+        fs::write(t.path().join("a"), b"aaa").expect("write");
+        let too_long: String = "x".repeat(1024);
+
+        let err = PlatformRenameOps
+            .rename_noreplace(&pin(t.path()), OsStr::new("a"), OsStr::new(&too_long))
+            .expect_err("a 1024-byte name is over every NAME_MAX this project targets");
+        assert_eq!(err, RenameErr::NameTooLong);
+        assert_eq!(fs::read(t.path().join("a")).expect("read"), b"aaa");
     }
 
     #[test]

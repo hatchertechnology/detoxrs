@@ -3,8 +3,11 @@
 //! M4 replaces this body with the UCD-generated `Cf`/`Cs`/`Co` closure behind an
 //! unchanged `is_invisible` signature, and builds that generator once for both
 //! this table and `scripts.rs`'s Script table. Until then the named set covers
-//! the whole CVE-2021-42574 (Trojan Source) class this stage exists for, which is
-//! what stage 4 is *for* rather than a superset of it.
+//! every bidi control in the CVE-2021-42574 (Trojan Source) advisory -- the
+//! embedding/override pairs, the isolates, and both marks (LRM/RLM and ALM) --
+//! which is what stage 4 is *for* rather than a superset of it. It does **not**
+//! yet cover the rest of `Cf`/`Zl`/`Zp` (U+2028, U+2029, U+180E and the like):
+//! those wait for M4's UCD closure below.
 //!
 //! Surrogates (`Cs`) cannot appear here: `char` cannot hold one, and a byte
 //! sequence encoding one is not valid UTF-8, so it never reaches text at all
@@ -24,8 +27,10 @@ pub const fn is_invisible(c: char) -> bool {
         '\u{202a}'..='\u{202e}'
         // Bidi isolates.
         | '\u{2066}'..='\u{2069}'
-        // Bidi marks.
-        | '\u{200e}' | '\u{200f}'
+        // Bidi marks: LRM, RLM, and ALM (the mark this table was missing --
+        // C11 -- which is inside the class the doc comment above claims to
+        // cover completely, not one of M4's deferred `Zl`/`Zp`/`Cf` cases).
+        | '\u{200e}' | '\u{200f}' | '\u{061c}'
         // Zero-width: ZWSP, ZWNJ, ZWJ, word joiner, BOM/ZWNBSP.
         | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{2060}' | '\u{feff}'
         // Unicode Tags, including the deprecated language tag (detox #120).
@@ -62,6 +67,14 @@ mod tests {
         ] {
             assert!(is_invisible(c), "{c:?}");
         }
+    }
+
+    /// C11: U+061C ARABIC LETTER MARK is a bidi control inside the CVE-2021-42574
+    /// class the module doc comment claims to cover completely -- unlike
+    /// U+2028/U+2029/U+180E, which are real but deliberately deferred to M4.
+    #[test]
+    fn arabic_letter_mark_is_stage_fours_business() {
+        assert!(is_invisible('\u{061c}'));
     }
 
     #[test]
