@@ -212,20 +212,27 @@ fn astral_emoji_corpus_entry_satisfies_both_limits() {
     }
 }
 
-/// Whether `s` starts with exactly one `.`, once leading invisible characters
-/// (stage 4's own subject) are looked past.
+/// Whether `s` starts with exactly one `.`, judged on the name with invisible
+/// characters removed.
 ///
-/// C-5: an invisible character in front of a dot is not itself a dot, and it
-/// is not visible content either -- `transform` deletes it. Comparing raw
-/// literal first characters, as this helper did before, made the property
-/// blind to C-5: for `"\u{200b}.bashrc"`, the literal check said "does not
-/// start with a dot" both before and after the bug's fix removed the leading
-/// dot, so the mismatch this property exists to catch never showed up. This
-/// is not the property's subject changing -- "did we manufacture or destroy a
-/// dotfile" was always about the name's real leading dot, and an invisible
-/// character was never part of that name's real content.
+/// C-5: stage 4 deletes invisible characters, so the leading dot run that
+/// survives is the one left behind once they are gone -- `".\u{200b}.x"` is
+/// `"..x"` after stage 4, two leading dots, every visible character intact.
+/// The helper has to measure the same thing the pipeline does, or it reports
+/// a violation the code never committed.
+///
+/// Two earlier shapes of this helper were both wrong. Comparing raw literal
+/// first characters made the property blind to C-5 itself: `"\u{200b}.bashrc"`
+/// read as "not a dotfile" on both sides of the assertion, so the two matched
+/// while a hidden file was being unhidden. Trimming only *leading* invisibles
+/// fixed that case but disagreed with the pipeline on invisibles sitting
+/// between dots, flagging `".\u{200b}.x" -> "..x"` as manufacturing a dotfile
+/// when it is the faithful result of deleting the invisible.
 fn exactly_one_leading_dot(s: &str) -> bool {
-    let s = s.trim_start_matches(detoxrs_core::invisible::is_invisible);
+    let s: String = s
+        .chars()
+        .filter(|c| !detoxrs_core::invisible::is_invisible(*c))
+        .collect();
     s.strip_prefix('.')
         .is_some_and(|rest| !rest.starts_with('.'))
 }
@@ -247,6 +254,33 @@ fn corpus_transforms_safely() {
                 e.id,
                 o.text
             );
+        }
+    }
+}
+
+/// The named cases behind [`exactly_one_leading_dot`]'s definition (C-5).
+///
+/// Pinned explicitly rather than left to the property: a proptest regression
+/// seed regenerates its input from a hash, so it cannot pin a particular
+/// string, and these three are the ones that distinguish a correct leading-dot
+/// rule from the two incorrect ones this helper has already had.
+#[test]
+fn invisible_characters_do_not_move_a_name_across_the_dotfile_boundary() {
+    let p = Policy::default();
+    for (input, want) in [
+        // The C-5 defect: a hidden file must stay hidden.
+        ("\u{200b}.bashrc", ".bashrc"),
+        // An invisible between dots: deleting it leaves both dots, and every
+        // visible character is preserved. Not a manufactured dotfile.
+        (".\u{200b}.x", "..x"),
+        // A leading dot run is preserved verbatim, invisible or not.
+        ("\u{200b}..hidden", "..hidden"),
+    ] {
+        match transform(input, &p) {
+            TransformResult::Name(o) => assert_eq!(o.text, want, "input {input:?}"),
+            other @ TransformResult::Unrepresentable(_) => {
+                panic!("input {input:?} did not transform: {other:?}")
+            }
         }
     }
 }
