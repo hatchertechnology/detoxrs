@@ -41,8 +41,10 @@
 use crate::fsops::RenameOps;
 use crate::journal::{JournalWrite, UndoItem};
 use crate::report::escape;
-use detoxrs_core::plan::{Ident, PlanItem, Resolution};
+use detoxrs_core::plan::{EntryKind, Ident, PlanItem, Resolution};
+use std::fs;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 
 /// What happened to one item.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,21 +66,47 @@ pub struct Summary {
     pub renamed: usize,
     /// How many items were attempted and refused.
     pub failed: usize,
+    /// How many items were left as an unresolved [`Resolution::Conflict`]
+    /// (`--on-collision skip`, or `number` exhausting every `-N` suffix).
+    ///
+    /// C-8: these items are never attempted, so they never reach `failed`,
+    /// but a batch that asked to rename something and left it untouched
+    /// because two names wanted the same destination is not a batch that
+    /// "fully did what it was asked" -- an unresolved conflict has to count
+    /// toward the exit code the same way an attempted-and-refused item does.
+    pub conflicts: usize,
+    /// Relative symlinks this batch left pointing at a name that no longer
+    /// exists, because the rename that broke them and the rename of the link
+    /// itself (or of neither) both happened in the same batch (C-9). The
+    /// link's own final path, for the report.
+    ///
+    /// Deliberately *detected, not repaired* -- see `apply.rs`'s module
+    /// comment on the C-9 judgement call.
+    pub broken_symlinks: Vec<std::path::PathBuf>,
     /// Why the rest of the batch was skipped, if it was.
     pub aborted: Option<String>,
 }
 
 impl Summary {
-    /// `0` when every attempted item succeeded and nothing aborted, `1`
-    /// otherwise. Exit `2` is for usage, walk and plan errors, which happen
-    /// before this function is reached.
+    /// `0` when every requested item was fully handled: nothing failed,
+    /// nothing aborted, no conflict was left unresolved, and no symlink was
+    /// broken. `1` otherwise. Exit `2` is for usage, walk and plan errors,
+    /// which happen before this function is reached.
+    ///
+    /// C-8: a plain preview (`detoxrs somedir`, no `-x`) never constructs a
+    /// `Summary` at all -- `main::preview` reports the plan and returns `0`
+    /// directly -- so counting conflicts here cannot make an ordinary preview
+    /// exit non-zero. This function only ever runs for an `-x` batch (or its
+    /// `undo`), where "found a conflict" and "could not resolve a conflict"
+    /// are the same event.
     #[must_use]
-    pub const fn exit_code(&self) -> u8 {
-        if self.failed > 0 || self.aborted.is_some() {
-            1
-        } else {
-            0
-        }
+    pub fn exit_code(&self) -> u8 {
+        u8::from(
+            self.failed > 0
+                || self.aborted.is_some()
+                || self.conflicts > 0
+                || !self.broken_symlinks.is_empty(),
+        )
     }
 }
 
@@ -97,8 +125,34 @@ pub fn run(
 ) -> Summary {
     let mut s = Summary {
         outcomes: vec![ItemResult::NotAttempted; items.len()],
+        // C-8: a `Conflict` item is never attempted -- `plan()` decided that
+        // before this function was ever called -- so it can never reach
+        // `failed` below. Counted up front here, once, rather than patched
+        // into the loop, because it does not depend on anything the loop
+        // does.
+        conflicts: items
+            .iter()
+            .filter(|it| matches!(it.resolution, Resolution::Conflict(_)))
+            .count(),
         ..Summary::default()
     };
+
+    // C-9: which symlinks this batch could break, and what they pointed at
+    // before anything moved. A link earns a check here only if it already
+    // resolved -- a link that was dangling before this run is not this
+    // batch's doing, and re-reporting it on every future run of the same
+    // tree would drown out the ones detoxrs actually caused. Captured before
+    // the loop below touches the filesystem at all.
+    let symlink_targets: Vec<(usize, PathBuf)> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, it)| it.kind == EntryKind::Symlink)
+        .filter_map(|(i, it)| {
+            let resolved = symlink_target_path(&it.dir, &it.from)?;
+            fs::symlink_metadata(&resolved).ok()?;
+            Some((i, resolved))
+        })
+        .collect();
 
     for (i, item) in items.iter().enumerate() {
         if s.aborted.is_some() {
@@ -129,7 +183,43 @@ pub fn run(
             }
         }
     }
+
+    // C-9: re-check every link that resolved before the batch. Its target
+    // text never changes -- a rename touches a directory entry's name, not a
+    // symlink's stored content -- so a link that resolved before and does
+    // not now was broken by a rename this very batch made, whether that was
+    // the rename of the target or (in principle) something else entirely.
+    for (i, resolved) in symlink_targets {
+        if fs::symlink_metadata(&resolved).is_err() {
+            let item = &items[i];
+            let final_name = if s.outcomes[i] == ItemResult::Renamed {
+                &item.to
+            } else {
+                &item.from
+            };
+            let link_path = item.dir.join(final_name);
+            eprintln!(
+                "detoxrs: warning: {} now points at a missing target; not repaired",
+                escape(link_path.as_os_str())
+            );
+            s.broken_symlinks.push(link_path);
+        }
+    }
+
     s
+}
+
+/// The path a symlink named `name` in `dir` points at, resolved but not
+/// followed further: one hop, because that hop is the one a rename in this
+/// batch can invalidate. `None` if `name` is not a symlink, or the link
+/// itself could not be read.
+fn symlink_target_path(dir: &Path, name: &std::ffi::OsStr) -> Option<PathBuf> {
+    let target = fs::read_link(dir.join(name)).ok()?;
+    Some(if target.is_absolute() {
+        target
+    } else {
+        dir.join(target)
+    })
 }
 
 /// Put a recorded batch back, newest rename first.

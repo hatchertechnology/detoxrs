@@ -30,9 +30,11 @@ use std::path::PathBuf;
                   Without -r, a directory argument has only its own name cleaned and nothing \
                   inside it is touched (detox differs).\n\n\
                   Exit codes:\n  \
-                  0  no errors\n  \
-                  1  one or more items could not be renamed\n  \
-                  2  usage, walk, or plan error"
+                  0  everything requested was done; a preview with nothing wrong still exits 0\n  \
+                  1  something requested could not be done: an item failed or the batch \
+                  aborted, a conflict was left unresolved, a subtree could not be read, or \
+                  a rename broke a relative symlink\n  \
+                  2  usage, walk, or plan error (nothing was attempted at all)"
 )]
 #[expect(
     clippy::struct_excessive_bools,

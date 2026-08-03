@@ -10,9 +10,14 @@
 //! `rename_noreplace`.** There is no second path to a rename in this crate:
 //! `fsops` owns the syscall, `apply` is its only caller, and `main` is `apply`'s.
 //!
-//! Exit codes: `0` no errors, `1` one or more items could not be renamed (or the
-//! batch aborted part-way), `2` usage, walk, or plan error — which are the
-//! failures where nothing was attempted at all.
+//! Exit codes: `0` everything requested was done (a preview that merely
+//! *reports* a conflict is still `0` — it changed nothing and was not asked
+//! to); `1` an `-x` run (or `undo`) that could not do everything it was
+//! asked: an item failed, the batch aborted part-way, a conflict was left
+//! unresolved, a subtree the walk needed to see could not be read, or a
+//! rename broke a relative symlink elsewhere in the tree (C-8, C-9); `2`
+//! usage, walk, or plan error — a failure where nothing was attempted at
+//! all.
 //!
 //! Unsafe-code policy: `forbid`, same as `detoxrs-core`. An earlier version of
 //! this crate used `deny` to leave room for a hand-written macOS `libc` FFI
@@ -75,32 +80,40 @@ fn run(args: &cli::Cli) -> Result<u8, String> {
         return undo(u);
     }
 
-    let entries = walk::snapshot(&args.paths, args.recursive).map_err(|e| e.to_string())?;
-    let case = walk::volume_case(&entries);
+    let snap = walk::snapshot(&args.paths, args.recursive).map_err(|e| e.to_string())?;
+    let case = walk::volume_case(&snap.entries);
     let policy = Policy::default(); // M1 has no transform flags; M3's config file fills this in.
 
-    let p = plan(&entries, &policy, args.on_collision.into(), case).map_err(describe)?;
+    let p = plan(&snap.entries, &policy, args.on_collision.into(), case).map_err(describe)?;
 
     if args.exec {
-        exec(&p, &policy, args.json, args.quiet)
+        exec(&p, &policy, args.json, args.quiet, &snap.unreadable)
     } else {
-        preview(&p, args).map(|()| 0)
+        preview(&p, args, &snap.unreadable)
     }
 }
 
 /// Print the plan and change nothing.
-fn preview(p: &Plan, args: &cli::Cli) -> Result<(), String> {
+///
+/// C-8: a plain preview reporting the conflicts it found is not an error --
+/// that is the whole point of a preview -- so `report::Tally`'s conflict
+/// count never affects the exit code here. A subtree the walk could not even
+/// see is different: the plan printed is not the plan for the whole tree the
+/// user named, so this exits `1` when `unreadable` is non-empty, the one way
+/// a preview can fail to do what it was asked without an `-x` in sight.
+fn preview(p: &Plan, args: &cli::Cli, unreadable: &[PathBuf]) -> Result<u8, String> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
     if args.json {
-        report::json(&mut out, p, None, None)
+        report::json(&mut out, p, None, None, unreadable, &[])
     } else if args.quiet {
         Ok(()) // --quiet is errors only, and a preview is not an error.
     } else {
-        report::preview(&mut out, p, args.verbose > 0)
+        report::preview(&mut out, p, args.verbose > 0, unreadable)
     }
     .and_then(|()| out.flush())
-    .map_err(|e| format!("cannot write output: {e}"))
+    .map_err(|e| format!("cannot write output: {e}"))?;
+    Ok(u8::from(!unreadable.is_empty()))
 }
 
 /// Open the journal, apply, and report.
@@ -108,12 +121,18 @@ fn preview(p: &Plan, args: &cli::Cli) -> Result<(), String> {
 /// The journal is opened **before** the first rename and its failure is exit 2
 /// with nothing attempted, which is §5.8's rule stated as control flow: renaming
 /// without a journal is the one outcome `undo` cannot fix.
-fn exec(p: &Plan, policy: &Policy, as_json: bool, quiet: bool) -> Result<u8, String> {
+fn exec(
+    p: &Plan,
+    policy: &Policy,
+    as_json: bool,
+    quiet: bool,
+    unreadable: &[PathBuf],
+) -> Result<u8, String> {
     // Nothing to rename means no journal, and that is not tidiness: an empty batch
     // would be the newest one, so `undo --last` would stop meaning "undo what I
     // just did" after any no-op `-x` run.
     if !p.items.iter().any(|i| i.resolution == Resolution::Rename) {
-        return report_nothing(p, as_json, quiet).map(|()| 0);
+        return report_nothing(p, as_json, quiet, unreadable);
     }
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
@@ -146,11 +165,18 @@ fn exec(p: &Plan, policy: &Policy, as_json: bool, quiet: bool) -> Result<u8, Str
     }
 
     let report_result = if as_json {
-        report::json(&mut out, p, Some(&s.outcomes), Some((&batch, &where_)))
+        report::json(
+            &mut out,
+            p,
+            Some(&s.outcomes),
+            Some((&batch, &where_)),
+            unreadable,
+            &s.broken_symlinks,
+        )
     } else if quiet {
         Ok(())
     } else {
-        report::applied(&mut out, p, &s, Some((&batch, &where_)))
+        report::applied(&mut out, p, &s, Some((&batch, &where_)), unreadable)
     }
     .and_then(|()| out.flush());
 
@@ -166,32 +192,62 @@ fn exec(p: &Plan, policy: &Policy, as_json: bool, quiet: bool) -> Result<u8, Str
     // succeeded (`exit_code() == 0`) still has to surface as "something is
     // wrong" when its own report never arrived, without claiming nothing was
     // attempted.
+    //
+    // C-8: `unreadable` folds in the same way -- a subtree the walk could not
+    // see is exactly as much "something is wrong" as a report write that
+    // failed, and neither one is allowed to erase a real `failed`/`aborted`
+    // count by taking `max` in the other direction.
+    let base = s.exit_code().max(u8::from(!unreadable.is_empty()));
     if let Err(e) = report_result {
         eprintln!("detoxrs: cannot write output: {e}");
-        return Ok(s.exit_code().max(1));
+        return Ok(base.max(1));
     }
 
-    Ok(s.exit_code())
+    Ok(base)
 }
 
 /// An `-x` run that found nothing to rename: the same closing report, minus the
 /// undo line, and no journal was opened.
-fn report_nothing(p: &Plan, as_json: bool, quiet: bool) -> Result<(), String> {
+///
+/// C-8: "nothing to rename" is not the same claim as "nothing was wrong" -- a
+/// batch that is entirely `--on-collision skip` conflicts never reaches
+/// `apply::run` at all (the guard above short-circuits before it), so the
+/// conflict count has to be worked out here, the same way `apply::run` works
+/// it out for a batch that does have renames.
+fn report_nothing(
+    p: &Plan,
+    as_json: bool,
+    quiet: bool,
+    unreadable: &[PathBuf],
+) -> Result<u8, String> {
     let empty = apply::Summary {
         outcomes: vec![apply::ItemResult::NotAttempted; p.items.len()],
+        conflicts: p
+            .items
+            .iter()
+            .filter(|i| matches!(i.resolution, Resolution::Conflict(_)))
+            .count(),
         ..apply::Summary::default()
     };
     let stdout = io::stdout();
     let mut out = stdout.lock();
     if as_json {
-        report::json(&mut out, p, Some(&empty.outcomes), None)
+        report::json(
+            &mut out,
+            p,
+            Some(&empty.outcomes),
+            None,
+            unreadable,
+            &empty.broken_symlinks,
+        )
     } else if quiet {
         Ok(())
     } else {
-        report::applied(&mut out, p, &empty, None)
+        report::applied(&mut out, p, &empty, None, unreadable)
     }
     .and_then(|()| out.flush())
-    .map_err(|e| format!("cannot write output: {e}"))
+    .map_err(|e| format!("cannot write output: {e}"))?;
+    Ok(empty.exit_code().max(u8::from(!unreadable.is_empty())))
 }
 
 /// `detoxrs undo`.

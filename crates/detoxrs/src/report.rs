@@ -24,7 +24,7 @@ use std::ffi::OsStr;
 // dropped rather than propagated.
 use std::fmt::Write as _;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Counts for the summary line.
 #[derive(Debug, Default, Clone, Copy)]
@@ -62,7 +62,12 @@ impl Tally {
 /// # Errors
 ///
 /// Propagates any write error from `w`.
-pub fn preview(w: &mut impl Write, plan: &Plan, show_unchanged: bool) -> io::Result<()> {
+pub fn preview(
+    w: &mut impl Write,
+    plan: &Plan,
+    show_unchanged: bool,
+    unreadable: &[PathBuf],
+) -> io::Result<()> {
     items(w, &plan.items, show_unchanged)?;
     let t = Tally::of(&plan.items);
     writeln!(
@@ -71,7 +76,8 @@ pub fn preview(w: &mut impl Write, plan: &Plan, show_unchanged: bool) -> io::Res
         t.rename, t.unchanged, t.skipped, t.conflicts
     )?;
     writeln!(w, "Nothing was changed. Re-run with -x to apply.")?;
-    not_utf8_hint(w, t)
+    not_utf8_hint(w, t)?;
+    unreadable_note(w, unreadable)
 }
 
 /// The closing report of an `-x` run.
@@ -91,6 +97,7 @@ pub fn applied(
     plan: &Plan,
     s: &Summary,
     journal: Option<(&str, &str)>,
+    unreadable: &[PathBuf],
 ) -> io::Result<()> {
     let t = Tally::of(&plan.items);
     // Items the plan never intended to rename are reported the same way the
@@ -114,11 +121,42 @@ pub fn applied(
     if let Some(why) = &s.aborted {
         writeln!(w, "The batch stopped early: {why}")?;
     }
+    // C-9: detected, not repaired (see `apply.rs`'s module doc on the
+    // judgement call) -- so the report's job is to make sure "0 failed" never
+    // reads as "nothing is wrong" when this batch left a link dangling.
+    if !s.broken_symlinks.is_empty() {
+        writeln!(
+            w,
+            "{} relative symlink(s) now point at a missing target (not repaired):",
+            s.broken_symlinks.len()
+        )?;
+        for link in &s.broken_symlinks {
+            writeln!(w, "  {}", escape(link.as_os_str()))?;
+        }
+    }
     if let Some((batch, path)) = journal {
         writeln!(w, "Undo with: detoxrs undo {batch}")?;
         writeln!(w, "Journal: {path}")?;
     }
-    not_utf8_hint(w, t)
+    not_utf8_hint(w, t)?;
+    unreadable_note(w, unreadable)
+}
+
+/// C-8: the one line that says a walk left part of the tree unexamined,
+/// shared by the preview and the applied report so the two cannot drift.
+fn unreadable_note(w: &mut impl Write, unreadable: &[PathBuf]) -> io::Result<()> {
+    if unreadable.is_empty() {
+        return Ok(());
+    }
+    writeln!(
+        w,
+        "{} path(s) could not be read and were not inspected at all (see warnings above):",
+        unreadable.len()
+    )?;
+    for p in unreadable {
+        writeln!(w, "  {}", escape(p.as_os_str()))?;
+    }
+    Ok(())
 }
 
 fn not_utf8_hint(w: &mut impl Write, t: Tally) -> io::Result<()> {
@@ -272,6 +310,8 @@ pub fn json(
     plan: &Plan,
     outcomes: Option<&[ItemResult]>,
     journal: Option<(&str, &str)>,
+    unreadable: &[PathBuf],
+    broken_symlinks: &[PathBuf],
 ) -> io::Result<()> {
     let t = Tally::of(&plan.items);
     let items: Vec<_> = plan
@@ -339,6 +379,18 @@ pub fn json(
         // Reported rather than assumed, because a consumer auditing a batch needs
         // to know which one it got.
         "atomicity": fsops::atomicity(),
+        // C-8: paths the walk could not read at all, so the plan above is not
+        // a plan for the whole tree named on the command line. Always
+        // present (empty when nothing was missed), same rule the rest of
+        // this document follows: a consumer should never have to infer
+        // absence from a field's absence.
+        "unreadable": unreadable.iter().map(|p| escape(p.as_os_str())).collect::<Vec<_>>(),
+        // C-9: relative symlinks this batch left dangling. Always empty for
+        // a preview (`applied == false`), because nothing has moved yet.
+        "broken_symlinks": broken_symlinks
+            .iter()
+            .map(|p| escape(p.as_os_str()))
+            .collect::<Vec<_>>(),
         "summary": {
             "to_rename": t.rename,
             "unchanged": t.unchanged,

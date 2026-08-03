@@ -76,18 +76,41 @@ impl fmt::Display for WalkError {
     }
 }
 
+/// A frozen entry list, plus a record of anything the walk could not see.
+///
+/// C-8: a directory `readdir` (or its entries' `lstat`) refused mid-recursion
+/// used to become a stderr warning and nothing else -- the snapshot came back
+/// looking exactly like a snapshot of a tree with no such directory in it, so
+/// a run that never inspected part of what it was told to clean reported `0
+/// failed` and exited `0`. `unreadable` is how that gap in the snapshot
+/// survives past `walk_into`'s return, so the caller can refuse to call the
+/// result a success.
+#[derive(Debug, Default)]
+pub struct Snapshot {
+    /// Every entry the walk could confirm.
+    pub entries: Vec<Entry>,
+    /// Paths the walk could not read (a `readdir` or an `lstat` refused) and
+    /// so skipped -- not fatal, since one unreadable subtree among many is not
+    /// a reason to abandon the rest, but real: the snapshot is missing
+    /// whatever lives under each of these.
+    pub unreadable: Vec<PathBuf>,
+}
+
 /// Freeze the entry list.
 ///
 /// Warnings about individual unreadable directories encountered *during*
-/// recursion go to stderr and the walk continues (§5.8, matching detox). Only
-/// the two [`WalkError`] cases stop it.
+/// recursion go to stderr and the walk continues (§5.8, matching detox); they
+/// land in [`Snapshot::unreadable`] too, so the walk being incomplete is not
+/// only ever visible on stderr. Only the two [`WalkError`] cases stop the walk
+/// outright.
 ///
 /// # Errors
 ///
 /// [`WalkError::Unreadable`] if a named path cannot be `lstat`ed;
 /// [`WalkError::OutOfDescriptors`] on `EMFILE`/`ENFILE`.
-pub fn snapshot(paths: &[PathBuf], recursive: bool) -> Result<Vec<Entry>, WalkError> {
+pub fn snapshot(paths: &[PathBuf], recursive: bool) -> Result<Snapshot, WalkError> {
     let mut out = Vec::new();
+    let mut unreadable = Vec::new();
     // Overlapping arguments (`detoxrs a a`, or `a` and `a/b` under `-r`) would
     // otherwise put one directory entry in the snapshot twice, and the planner
     // would treat the second copy as a pre-existing occupant of the first one's
@@ -153,10 +176,19 @@ pub fn snapshot(paths: &[PathBuf], recursive: bool) -> Result<Vec<Entry>, WalkEr
         );
 
         if recursive && md.is_dir() {
-            walk_into(&mut out, &mut seen, &mut dir_idents, &lstat_path)?;
+            walk_into(
+                &mut out,
+                &mut seen,
+                &mut dir_idents,
+                &lstat_path,
+                &mut unreadable,
+            )?;
         }
     }
-    Ok(out)
+    Ok(Snapshot {
+        entries: out,
+        unreadable,
+    })
 }
 
 /// The name `readdir` actually stores for `path`, not the bytes the argument
@@ -270,6 +302,7 @@ fn walk_into(
     seen: &mut HashSet<(DirIdent, OsString)>,
     dir_idents: &mut HashMap<PathBuf, DirIdent>,
     root: &Path,
+    unreadable: &mut Vec<PathBuf>,
 ) -> Result<(), WalkError> {
     let walker = WalkDir::new(root)
         .follow_links(false)
@@ -295,6 +328,15 @@ fn walk_into(
                             .unwrap_or_else(|| io::Error::other("file descriptor exhaustion")),
                     ));
                 }
+                // C-8: this directory (or entry) is missing from the
+                // snapshot from here on, so the walk cannot honestly claim
+                // it saw everything it was asked to. `e.path()` is the
+                // specific entry `walkdir` was trying to read when it hit
+                // the error, which is `None` only in cases `walkdir` itself
+                // does not attach a path to (e.g. the root `read_dir` call
+                // failing before any entry exists); falling back to `root`
+                // still names the subtree that went dark.
+                unreadable.push(e.path().unwrap_or(root).to_path_buf());
                 eprintln!("detoxrs: warning: {e}");
                 continue;
             }
@@ -305,7 +347,10 @@ fn walk_into(
         let path = entry.path();
         match fs::symlink_metadata(path) {
             Ok(md) => push(out, seen, dir_idents, path, &md, entry.depth()),
-            Err(e) => eprintln!("detoxrs: warning: cannot read {}: {e}", path.display()),
+            Err(e) => {
+                unreadable.push(path.to_path_buf());
+                eprintln!("detoxrs: warning: cannot read {}: {e}", path.display());
+            }
         }
     }
     Ok(())
