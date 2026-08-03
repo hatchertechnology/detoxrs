@@ -39,6 +39,10 @@ fmt-check-file +files:
 build:
     cargo build --workspace --locked
 
+# Run the CLI: just run -r some/dir (preview), just run -x -r some/dir (apply)
+run *args:
+    cargo run --locked -p detoxrs -- {{ args }}
+
 # Run the workspace test suite
 test:
     cargo test --workspace --locked
