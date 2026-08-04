@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "adrs": {
+      "command": "adrs",
+      "args": ["mcp", "serve"]
+    },
+    "fff": {
+      "command": "fff-mcp",
+      "args": ["--no-update-check"]
+    }
+  }
+}
