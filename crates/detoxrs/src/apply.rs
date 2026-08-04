@@ -450,8 +450,8 @@ mod tests {
     /// implementation. This is C4's guard: `fsops::tests` pins a `Dir` the
     /// *test* creates and asserts a property of `fsops` alone, so it
     /// structurally cannot see `apply::attempt` acquiring a second handle --
-    /// which is where the original defect (`docs/HANDOFF.md`'s "worst finding
-    /// of the previous pass") actually lived. An adversarial review proved
+    /// which is where the original defect actually lived. An adversarial review
+    /// proved
     /// that guard blind by adding one line to `apply.rs` that re-opens
     /// `item.dir` right before the rename, reinstating the original defect
     /// with `cargo test` fully green; the reinstated line only showed up as

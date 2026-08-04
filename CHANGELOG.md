@@ -11,5 +11,4 @@ No release has shipped yet. M1 (preview, `-x`, the transform pipeline, the
 undo journal and `undo`) is functionally complete on `main`, but nothing has
 been tagged: `release-please` opens its first release PR once a `feat:`/`fix:`
 commit lands, and that PR still needs a human to review and merge it. The
-first dated entry below will appear then. See `docs/HANDOFF.md` for the
-detailed, currently-accurate state.
+first dated entry below will appear then.

@@ -18,7 +18,7 @@ Do not open a public issue for a security vulnerability. See
 ## Finding something to work on
 
 There is no application logic yet — the workspace is scaffolding only (see
-`docs/rust-setup-notes.md`). Check open issues, and look for a
+`docs/research/rust-setup-notes.md`). Check open issues, and look for a
 `good first issue` label once the project starts labeling them (it does not
 yet).
 
@@ -91,7 +91,7 @@ The workspace MSRV is **1.93.0** (`rust-version` in the workspace
 `Cargo.toml`), separate from the pinned toolchain (1.96.1, in
 `rust-toolchain.toml`, used for day-to-day development). Do not use stdlib or
 language features stabilized after 1.93.0, and do not raise the MSRV without
-updating both `Cargo.toml` and `docs/rust-setup-notes.md`'s derivation. Run
+updating both `Cargo.toml` and `docs/research/rust-setup-notes.md`'s derivation. Run
 `just msrv` to verify a change still builds on the MSRV toolchain.
 
 ## Code standards
@@ -159,7 +159,7 @@ until a maintainer creates the `release` GitHub Environment and its secrets.
 `detoxrs` is not published to crates.io — the binary is the product (see
 `docs/research/00-proposal-rust-detox-successor.md` §7.1). Do not hand-edit a
 version field; `release-please` owns versions and `CHANGELOG.md`. Full detail in
-`docs/rust-setup-release.md`, including a recommended future move to
+`docs/research/rust-setup-release.md`, including a recommended future move to
 `release-plz` + `cargo-dist` before the v1.0 packaging milestone.
 
 ## Licensing of contributions

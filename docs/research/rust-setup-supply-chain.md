@@ -3,7 +3,7 @@
 Agent C's pass. Written against `wiki/rust/ideal-project-setup/supply-chain.md`
 and `security-scanning.md` (primary sources), plus `README.md`'s non-negotiable
 release baseline, `dependencies.md`, `secure-development.md`, and `ci-cd.md`.
-Builds on the foundation in `docs/rust-setup-notes.md`.
+Builds on the foundation in `docs/research/rust-setup-notes.md`.
 
 **Ground truth that shapes every decision below: the workspace has zero
 non-dev dependencies today.** `detoxrs` depends only on `detoxrs-core`
@@ -61,7 +61,7 @@ not-encountered list in their place.
 `BSD-3-Clause` is retained for dependencies only. The analysis below is the
 state as written before that decision.
 
-`docs/rust-setup-notes.md` already flags that the repo's `LICENSE` is
+`docs/research/rust-setup-notes.md` already flags that the repo's `LICENSE` is
 BSD-3-Clause while the guide's Rust-ecosystem convention is dual
 MIT/Apache-2.0. That conflict is **not resolved here** — it is a project
 licensing decision, not a supply-chain-tooling one. What _is_ mine to handle
@@ -100,7 +100,7 @@ it with the task brief's "<=10 / <=45" framing.
 
 **Adjudicated 2026-07-31: this reading is correct and is now the single
 authority across all five setup notes.** The proposal is the governing source;
-`docs/rust-setup-notes.md` had a stale "<= 45" line and it has been struck.
+`docs/research/rust-setup-notes.md` had a stale "<= 45" line and it has been struck.
 There is exactly one enforced cap: **<= 11 direct dependencies**, enforced by
 `just dep-budget` (ran: `0/11 direct dependencies: (none)`).
 
@@ -206,7 +206,7 @@ because it declared `#![deny(unsafe_code)]` and geiger only special-cases
 later `#[allow(unsafe_code)]` can override in a specific block. **As of
 2026-07-31 the binary crate declares `#![forbid(unsafe_code)]` too** (the
 `renamex_np` FFI shim the `deny` was reserving room for turned out to be
-unnecessary — `rustix` wraps it from safe code; see `docs/rust-setup-notes.md`),
+unnecessary — `rustix` wraps it from safe code; see `docs/research/rust-setup-notes.md`),
 so both crates should now report `:)`. Re-run `just geiger` to confirm the
 symbol changed.
 
@@ -221,7 +221,7 @@ because its default target is Linux). `nix` genuinely does not. So no
 `renamex_np` FFI shim is needed and both crates could use `forbid`. The
 _geiger observation_ above is unaffected — `detoxrs` really does still declare
 `deny` today, so geiger really does still print `?` for it. If the crate moves
-to `forbid`, that `?` becomes `:)`. See `docs/rust-setup-notes.md` for the
+to `forbid`, that `?` becomes `:)`. See `docs/research/rust-setup-notes.md` for the
 full correction. Wired into
 `security.yml` as `cargo geiger --manifest-path <abs>/crates/detoxrs/Cargo.toml || true` — never gates the build,
 per the guide.
@@ -260,7 +260,7 @@ lands and there's something worth seeing in the output.
 
 **Status (stage 3, 2026-07-31) — the SBOM crossed wire, resolved.** This
 document decided granularity ("one SBOM per workspace member", via
-`--output-pattern package`); `docs/rust-setup-release.md` separately asked
+`--output-pattern package`); `docs/research/rust-setup-release.md` separately asked
 agent C to decide granularity as if it were still open. It was not: the answer
 below is the answer, and `rust-setup-release.md` has been updated to stop
 asking. What that leaves is a real, named gap rather than an open request to a
@@ -350,7 +350,7 @@ work" as "the workflow passes in CI."
 ## Justfile recipes needed — all DONE (re-verified 2026-07-31)
 
 Per `local-dev.md`'s `ci: fmt lint test audit msrv deny trivy vet geiger`
-pattern referenced in `docs/rust-setup-notes.md`'s checklist, the recipes below
+pattern referenced in `docs/research/rust-setup-notes.md`'s checklist, the recipes below
 were requested by this pass (which did not own `justfile`). **Every one now
 exists** — verified by running `just --list` and reading `justfile`: `audit`,
 `deny`, `vet`, `geiger`, `trivy`, plus `sbom` and `dep-budget`, and
@@ -466,7 +466,7 @@ in the same change that reconciles this.
 - **`justfile` recipes and the AGENTS.md formatting-checker rule.** Both
   explicitly out of scope per the task brief; specified exactly above for
   whoever picks them up.
-- **`cargo-msrv`.** Not this task's concern — `docs/rust-setup-notes.md`
+- **`cargo-msrv`.** Not this task's concern — `docs/research/rust-setup-notes.md`
   already covers why `just msrv` uses `rustup`/`cargo +<version>` directly.
 
 ## Review record (stage 3)

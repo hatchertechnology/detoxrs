@@ -8,7 +8,7 @@ on:
     # Weekly, independent of any commit: a RustSec advisory can be published
     # against a dependency already in Cargo.lock with nothing else changing.
     # See wiki/rust/ideal-project-setup/ci-cd.md "Evidence retention and
-    # scheduled checks" and docs/rust-setup-supply-chain.md.
+    # scheduled checks" and docs/research/rust-setup-supply-chain.md.
     - cron: "0 6 * * 1"
 
 env:
@@ -29,7 +29,7 @@ jobs:
   # "putting it together" job shape.
   #
   # STATUS: the workspace has zero non-dev dependencies today (see
-  # docs/rust-setup-notes.md), so cargo-audit and cargo-deny's advisory/
+  # docs/research/rust-setup-notes.md), so cargo-audit and cargo-deny's advisory/
   # license checks are trivially clean and cargo-geiger reports zero unsafe
   # everywhere. A green run here proves the tooling is wired correctly, not
   # that any dependency is safe -- there is nothing to be unsafe yet.

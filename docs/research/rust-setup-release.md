@@ -257,7 +257,7 @@ agent's to edit.
 
 This section previously asked agent C to decide SBOM tooling, format, and
 granularity. **Those questions are all answered** (verified 2026-07-31 by
-reading `docs/rust-setup-supply-chain.md`), so this is no longer a request to
+reading `docs/research/rust-setup-supply-chain.md`), so this is no longer a request to
 another agent — it is a single named gap with an owner:
 
 | Question    | Answer                                                                                                                                                          |
@@ -361,7 +361,7 @@ half-build now.
   no breaking config-schema change was found for `release-please-config.json`
   itself. Used v5 rather than following the guide's stale v4 pin, and
   reported this rather than silently reproducing the guide's version.
-- `just fmt-check-file docs/rust-setup-release.md CHANGELOG.md` -- **passes**
+- `just fmt-check-file docs/research/rust-setup-release.md CHANGELOG.md` -- **passes**
   (prettier, via the existing recipe; repo-wide `fmt`/`fmt-check` was not run,
   since other agents are concurrently editing files outside this agent's
   scope).

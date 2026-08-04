@@ -4,6 +4,6 @@
 # (Cargo.toml `[workspace.package] rust-version`, currently 1.93.0) is
 # enforced separately by `just msrv`, which builds with that exact toolchain
 # via rustup. Bump this file whenever a new stable is installed and verified;
-# see docs/rust-setup-notes.md.
+# see docs/research/rust-setup-notes.md.
 channel = "1.96.1"
 components = ["rustfmt", "clippy"]

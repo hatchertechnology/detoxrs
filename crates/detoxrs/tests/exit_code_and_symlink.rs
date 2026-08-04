@@ -1,6 +1,6 @@
-//! Regression tests for C-8 and C-9 (`docs/reviews/full-app-adversarial-CONSOLIDATED.md`):
-//! a run that could not do what it was asked used to exit `0`, and a batch
-//! that broke a relative symlink reported `0 failed`.
+//! Regression tests for two defects from the second adversarial review of M1
+//! (C-8, C-9): a run that could not do what it was asked used to exit `0`, and
+//! a batch that broke a relative symlink reported `0 failed`.
 //!
 //! Every test drives the real binary against a real temporary tree, and
 //! `XDG_STATE_HOME` is pointed at a throwaway directory so a run here never

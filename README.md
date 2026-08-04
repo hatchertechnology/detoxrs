@@ -9,9 +9,9 @@ by default; nothing is renamed until you ask.
 
 > **Status: M1 complete.** Preview, `-x` to apply, the undo journal and `undo`
 > all work end to end, on both real filesystems detox users care about (ext4,
-> APFS). This is not yet a finished tool: an independent adversarial review of
-> M1 found fifteen defects (several high-severity) that are being worked
-> through, and later milestones (`docs/plans/unified-draft-plan.md`) still owe
+> APFS). This is not yet a finished tool: two independent adversarial reviews
+> of M1 found thirty-one defects, several of them high-severity, all now fixed;
+> thirteen low-severity findings remain open. Later milestones still owe
 > percent-escape decoding, config-file rules, reserved-name handling and a
 > `--separator` flag. Treat it as a working preview, not a hardened release.
 

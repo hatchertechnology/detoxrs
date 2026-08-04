@@ -8,7 +8,7 @@ edition = "2024"
 # MSRV policy (proposal §1, restated): "stable at least 6 months old". Verified
 # via `rustup toolchain install`: 1.93.0 released 2026-01-19 (>= 6 months
 # before today, 2026-07-31); 1.94.0 released 2026-03-02 (only ~5 months old,
-# too new). See docs/rust-setup-notes.md for the full derivation.
+# too new). See docs/research/rust-setup-notes.md for the full derivation.
 rust-version = "1.93.0"
 # Dual MIT OR Apache-2.0, the Rust-ecosystem convention: see /LICENSE-MIT and
 # /LICENSE-APACHE. Relicensed from BSD-3-Clause on 2026-07-31 by owner

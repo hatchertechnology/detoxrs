@@ -5,7 +5,7 @@
 #
 # STATUS AS OF THIS WRITING: the workspace has zero non-dev dependencies
 # (crates/detoxrs-core and crates/detoxrs depend on nothing but each other;
-# see docs/rust-setup-notes.md). Every check below is trivially clean today
+# see docs/research/rust-setup-notes.md). Every check below is trivially clean today
 # because there is nothing to check — a green `cargo deny check` right now
 # proves the policy file parses and the tool runs, not that any dependency is
 # safe. This file exists so the policy is already in force the day the first

@@ -4,7 +4,7 @@
 # RustSec advisory database". Run with `cargo audit`.
 #
 # STATUS: the workspace has zero non-dev dependencies (see
-# docs/rust-setup-notes.md), so this file exists to hold the policy in
+# docs/research/rust-setup-notes.md), so this file exists to hold the policy in
 # place, not because anything has needed an exception yet.
 
 [advisories]

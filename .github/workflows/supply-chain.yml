@@ -22,9 +22,9 @@ jobs:
   # different failure modes").
   #
   # STATUS: the workspace has zero non-dev dependencies (see
-  # docs/rust-setup-notes.md), so `cargo vet check` passes vacuously --
+  # docs/research/rust-setup-notes.md), so `cargo vet check` passes vacuously --
   # there is nothing in the tree to audit or exempt. See
-  # supply-chain/config.toml and docs/rust-setup-supply-chain.md for why
+  # supply-chain/config.toml and docs/research/rust-setup-supply-chain.md for why
   # this is set up minimally rather than with fabricated exemptions.
   vet:
     name: vet

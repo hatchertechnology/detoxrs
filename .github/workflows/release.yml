@@ -1,4 +1,4 @@
-# Release automation (release-please), per docs/rust-setup-release.md.
+# Release automation (release-please), per docs/research/rust-setup-release.md.
 #
 # Safety model, read before touching this file:
 #   - This workflow runs on every push to `main`, but the ONLY thing that
@@ -17,14 +17,14 @@
 #     Environment. That environment does NOT exist yet — it must be created
 #     by a repo admin (Settings -> Environments) with required reviewers
 #     before this workflow can do anything beyond the release-please PR
-#     bookkeeping. See docs/rust-setup-release.md "Deferred / needs a human".
-#   - There is no `cargo publish` job. See docs/rust-setup-release.md for why
+#     bookkeeping. See docs/research/rust-setup-release.md "Deferred / needs a human".
+#   - There is no `cargo publish` job. See docs/research/rust-setup-release.md for why
 #     (the binary is the product; crates.io publish is deliberately deferred,
 #     see proposal 00 section 9.4 and 7.1).
 #
 # UNEXECUTED: this workflow has not been run. It cannot be validated without
 # a real push to `main` in this repo (or a fork with its own App token
-# secrets). See docs/rust-setup-release.md "Verification" for what a human
+# secrets). See docs/research/rust-setup-release.md "Verification" for what a human
 # must do before trusting it for a real release.
 
 name: release
@@ -53,7 +53,7 @@ jobs:
     steps:
       # A GitHub App token is required (not the default GITHUB_TOKEN) so
       # that a tag pushed by this job can itself trigger the `build` job
-      # below -- see docs/rust-setup-release.md "Why a GitHub App token".
+      # below -- see docs/research/rust-setup-release.md "Why a GitHub App token".
       # secrets.RELEASE_APP_ID / secrets.RELEASE_APP_PRIVATE_KEY do not exist
       # yet; a human must create the App and add these secrets before this
       # step will run. Until then this job fails closed (no token = no
@@ -97,7 +97,7 @@ jobs:
           # musl-linux (proposal 00 section 9.4's packaging list): no native
           # musl cross-toolchain on the stock runner image, so these build
           # via `cross` (Docker-based) instead of bare `cargo`. UNVERIFIED --
-          # see docs/rust-setup-release.md "Targets" for the specific risk
+          # see docs/research/rust-setup-release.md "Targets" for the specific risk
           # (cargo-auditable's interaction with `cross` has not been tested).
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-latest
@@ -146,7 +146,7 @@ jobs:
 
       - name: Install cargo-auditable
         # UNVERIFIED under `cross` -- native targets only for now. See
-        # docs/rust-setup-release.md.
+        # docs/research/rust-setup-release.md.
         if: ${{ !matrix.cross }}
         uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2 (resolved 2026-07-31)
         with:
@@ -241,7 +241,7 @@ jobs:
       #   3. One SBOM per target, or one SBOM covering the whole release --
       #      agent C should say which, and this job's copy step (and the
       #      user-facing docs) will name it accordingly.
-      # See docs/rust-setup-release.md "What I need from agent C".
+      # See docs/research/rust-setup-release.md "What I need from agent C".
 
       - name: Attest build provenance for every release archive
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0 (pinned via v2 tag, resolved 2026-07-31)

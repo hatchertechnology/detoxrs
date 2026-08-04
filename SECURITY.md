@@ -53,7 +53,7 @@ real support window is defined (see the placeholder in
 
 > **Placeholder — human decision needed:** the response-time and fix-timeline
 > commitments below are not yet a real commitment; this project has no
-> dedicated security-response owner today (see `docs/rust-setup-governance.md`
+> dedicated security-response owner today (see `docs/research/rust-setup-governance.md`
 > and `governance.md`'s "security-response owner" requirement). Do not treat
 > the table below as a promise until a maintainer confirms it can actually be
 > met, or replace it with honest, currently-achievable numbers.
@@ -156,7 +156,7 @@ instead, since these are not confidential):
 exists in the codebase. No FFI shim is planned: the no-clobber rename syscalls
 this tool needs (`renameat2` on Linux, `renameatx_np` on macOS) are reachable
 from safe code through `rustix::fs::renameat_with` (proposal §5.4, §7.2;
-correction recorded in `docs/rust-setup-notes.md`). Introducing `unsafe` would
+correction recorded in `docs/research/rust-setup-notes.md`). Introducing `unsafe` would
 therefore mean deliberately relaxing a `forbid` attribute, which is a
 reviewable change in its own right — and if it ever happens, the safety
 argument and the syscalls wrapped become part of this project's

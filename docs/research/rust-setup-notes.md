@@ -100,7 +100,7 @@ clippy` still just warns.
 - ~~`cargo-deny`, `cargo-vet`, `cargo-audit`, `cargo-geiger`, Trivy: no `deny.toml`/CI
   wiring added.~~ **DONE.** `deny.toml`, `supply-chain/`, `.cargo/audit.toml`,
   `.github/workflows/security.yml` and `.github/workflows/supply-chain.yml` all exist;
-  see `docs/rust-setup-supply-chain.md`. `cargo-msrv` itself is still **not** used:
+  see `docs/research/rust-setup-supply-chain.md`. `cargo-msrv` itself is still **not** used:
   `just msrv` uses `rustup`/`cargo +<version>` directly, which needs only the
   toolchain already installed. That remains a deliberate choice, not a gap.
 - ~~`just ci`/`gate` does not chain `audit`, `deny`, `trivy`, `vet`, `geiger`.~~
@@ -129,18 +129,18 @@ clippy` still just warns.
 ## Checklist for later agents (status re-verified 2026-07-31)
 
 - [x] CI: GitHub Actions workflows (build matrix, clippy, fmt, msrv job pinned to
-      1.93.0). **DONE** — `.github/workflows/ci.yml`, `docs/rust-setup-ci.md`.
+      1.93.0). **DONE** — `.github/workflows/ci.yml`, `docs/research/rust-setup-ci.md`.
 - [x] Supply chain: `deny.toml`, `cargo-vet` policy/audits, `cargo-audit` wiring,
       Trivy scan; `just gate`/`ci` chaining. **DONE** —
-      `docs/rust-setup-supply-chain.md`.
+      `docs/research/rust-setup-supply-chain.md`.
 - [x] Security scanning: `cargo-geiger`. **DONE** — `just geiger` (needs an absolute
       `--manifest-path`; `-p` does not work against a virtual manifest).
 - [x] Release automation: `release-please` config, `cargo publish` posture (still
       "do not publish", per §7.1), cross-platform binary builds. **DONE** —
-      `.github/workflows/release.yml`, `docs/rust-setup-release.md`. Note the
+      `.github/workflows/release.yml`, `docs/research/rust-setup-release.md`. Note the
       **tooling conflict**: the guide prescribes `release-please`, proposal §9.4
       chose `cargo-dist` + `release-plz`. `release-please` is the deliberate interim
-      choice and `docs/rust-setup-release.md` recommends switching before the v1.0
+      choice and `docs/research/rust-setup-release.md` recommends switching before the v1.0
       packaging milestone — the choice was not uncontested, and a human still owes
       that decision.
 - [x] Governance: `SECURITY.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`,
@@ -154,7 +154,7 @@ clippy` still just warns.
       **OUTSTANDING**, deliberately: there is still no application logic to test.
 - [ ] TOML formatting checker (`taplo` or equivalent). Still **OUTSTANDING** and
       still in tension with `AGENTS.md`'s "add a checker in the same change" rule —
-      five TOML files now exist unchecked. See `docs/rust-setup-supply-chain.md`.
+      five TOML files now exist unchecked. See `docs/research/rust-setup-supply-chain.md`.
 
 ## Review record (stage 3)
 

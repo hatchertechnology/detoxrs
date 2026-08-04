@@ -1,5 +1,5 @@
-//! Filesystem-level regression tests for three walk/plan defects (adversarial
-//! review `docs/reviews/m1-write-path-adversarial-review.md`, C3/C8/C9).
+//! Filesystem-level regression tests for three walk/plan defects, from the
+//! first adversarial review of the M1 write path (its C3/C8/C9).
 //!
 //! Every assertion here reads the real filesystem after running the real
 //! binary -- never a mock, never a value compared to itself -- because that is

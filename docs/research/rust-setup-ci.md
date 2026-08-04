@@ -4,7 +4,7 @@ CI/Dependabot pass. Written against `wiki/rust/ideal-project-setup/ci-cd.md`
 and `msrv.md` (primary sources), `dependencies.md`, `README.md`,
 `local-dev.md`, skimmed `code-quality.md`/`testing.md`, and
 `docs/research/00-proposal-rust-detox-successor.md` §6.4. Builds on
-`docs/rust-setup-notes.md` (Agent A's foundation pass) without contradicting
+`docs/research/rust-setup-notes.md` (Agent A's foundation pass) without contradicting
 it. Scope: `.github/workflows/ci.yml`, `.github/dependabot.yml`.
 
 ## Job design
@@ -174,7 +174,7 @@ and called as if it existed.
 `.github/dependabot.yml`: `cargo` and `github-actions` ecosystems, both
 weekly, per `dependencies.md`'s batching/CI-cost/review-bandwidth rationale.
 No dependency-group config, since there's nothing to group yet (zero
-non-dev dependencies exist per `docs/rust-setup-notes.md`) — adding grouping
+non-dev dependencies exist per `docs/research/rust-setup-notes.md`) — adding grouping
 rules now would be speculative config for dependencies that don't exist.
 Dependabot's `github-actions` ecosystem understands SHA-pinned actions and
 will open PRs that bump the SHA (with an updated version comment), matching
@@ -186,14 +186,14 @@ will open PRs that bump the SHA (with an updated version comment), matching
   cargo-geiger, cargo-vet)~~ — **DONE by another agent**, as separate workflow
   files rather than jobs in `ci.yml`: `.github/workflows/security.yml` and
   `.github/workflows/supply-chain.yml`. See
-  `docs/rust-setup-supply-chain.md`. Not folded into `ci.yml`; `ci.yml` is
+  `docs/research/rust-setup-supply-chain.md`. Not folded into `ci.yml`; `ci.yml` is
   unchanged by that work.
 - ~~Scheduled (cron) runs for RustSec/license checks~~ — **DONE** in
   `security.yml` (weekly `0 6 * * 1`). Evidence retention for release
   artifacts and org-level full-length-SHA policy remain **OUTSTANDING** and
   belong with release/org work, not this CI skeleton.
 - ~~`release-please`/release workflow~~ — **DONE by another agent**:
-  `.github/workflows/release.yml`, `docs/rust-setup-release.md`. Still out of
+  `.github/workflows/release.yml`, `docs/research/rust-setup-release.md`. Still out of
   this document's scope; noted so the deferral does not read as an open
   request.
 - True aarch64-musl and any emulated/hosted-ARM _test_ execution (as
@@ -208,7 +208,7 @@ following has been verified against a live GitHub Actions run:
 
 - That `cargo build`/`test --locked` actually succeeds on each runner OS
   (only verified locally on this machine's toolchain, per
-  `docs/rust-setup-notes.md`).
+  `docs/research/rust-setup-notes.md`).
 - That the `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-musl` cross
   builds succeed with just the apt packages named (cross-compilation is
   notorious for missing linker/pkg-config wrinkles that only show up on the

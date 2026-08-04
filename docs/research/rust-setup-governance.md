@@ -81,7 +81,7 @@ resolved" paragraph describes work that has since been done, so it is a record
 of a prediction that came true, not an open action item. Nothing below needs
 following as an instruction.
 
-Per `docs/rust-setup-notes.md`, the repo `LICENSE` is BSD-3-Clause; the guide
+Per `docs/research/rust-setup-notes.md`, the repo `LICENSE` is BSD-3-Clause; the guide
 (`governance.md`) recommends the Rust-ecosystem convention of dual
 MIT/Apache-2.0. This agent did not relicense, did not add
 `LICENSE-MIT`/`LICENSE-APACHE`, and did not touch `LICENSE`, per instructions.
@@ -123,7 +123,7 @@ in-scope list was built from the actual safety architecture described in
 
 This is intentionally a design-target threat model, not a verified-secure
 claim: the application code implementing these guarantees does not exist yet
-(per `docs/rust-setup-notes.md`, `main.rs` is a placeholder). `SECURITY.md`
+(per `docs/research/rust-setup-notes.md`, `main.rs` is a placeholder). `SECURITY.md`
 says "designed to" throughout rather than asserting the properties hold
 today, and the RustSec/`cargo audit` cross-reference is marked as
 not-yet-wired-up rather than described as active.
@@ -158,11 +158,11 @@ not-yet-wired-up rather than described as active.
   `supply-chain.yml`; `release-please` and provenance are wired into
   `release.yml`. Two consequences for this document's scope. (1) `SECURITY.md`
   still says dependency scanning is "not yet done" (and points at
-  `docs/rust-setup-notes.md`); that is now stale and should be corrected by
+  `docs/research/rust-setup-notes.md`); that is now stale and should be corrected by
   whoever owns `SECURITY.md`. (2) **SBOM is the exception** — it is still not
   wired (`release.yml` has only a `TODO`, and `cargo-cyclonedx` is not
   installed), so nothing in the governance documents should describe a published
-  SBOM as available. See Gap SBOM-1 in `docs/rust-setup-release.md`. Note also
+  SBOM as available. See Gap SBOM-1 in `docs/research/rust-setup-release.md`. Note also
   that no GitHub Actions workflow in this repo has ever run, so none of the
   above may be described as a passing check.
 

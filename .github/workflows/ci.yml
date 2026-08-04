@@ -9,7 +9,7 @@ env:
   CARGO_TERM_COLOR: always
   # MSRV declared in Cargo.toml's [workspace.package] rust-version and
   # mirrored in clippy.toml. Keep this in sync with both (see
-  # docs/rust-setup-ci.md and docs/rust-setup-notes.md).
+  # docs/research/rust-setup-ci.md and docs/research/rust-setup-notes.md).
   MSRV: "1.93.0"
 
 # Default every job to read-only. This workflow neither publishes nor
@@ -75,7 +75,7 @@ jobs:
   # musl cross C toolchain that isn't a simple `apt-get install` package (the
   # gnu cross target only needs `gcc-aarch64-linux-gnu`; musl cross needs a
   # prebuilt musl-cross toolchain or the `cross`/`cargo-zigbuild` tooling).
-  # See docs/rust-setup-ci.md for what's deferred and why.
+  # See docs/research/rust-setup-ci.md for what's deferred and why.
   cross-build:
     name: cross-build (${{ matrix.target }})
     runs-on: ubuntu-latest
@@ -109,7 +109,7 @@ jobs:
   # Markdown in the repo, which is a repo-wide docs-formatting concern, not
   # the Rust lint gate this job exists to enforce (and would make this job's
   # pass/fail depend on unrelated Markdown files it doesn't own). See
-  # docs/rust-setup-ci.md.
+  # docs/research/rust-setup-ci.md.
   lint:
     name: lint
     runs-on: ubuntu-latest
