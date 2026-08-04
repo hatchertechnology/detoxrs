@@ -63,8 +63,9 @@ alternatives recorded, the entry cites an ADR rather than restating it.
   is checkable rather than a matter of review.
 - Bad, because there are now two places a reader must check for a past
   decision. Mitigated by the boundary above, but it is a real cost.
-- Bad, because the sixteen decisions already made during M1 remediation are not
-  retrofitted here; they stay in commit messages unless a later ADR adopts them.
+- Bad, because only the M1 remediation decisions that had genuine alternatives were
+  retrofitted (ADR 2-7). The rest were plain bug fixes with no decision to record,
+  and stay in commit messages.
 
 ### Confirmation
 
