@@ -244,7 +244,7 @@ jobs:
       # See docs/research/rust-setup-release.md "What I need from agent C".
 
       - name: Attest build provenance for every release archive
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0 (pinned via v2 tag, resolved 2026-07-31)
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v2.4.0 (pinned via v2 tag, resolved 2026-07-31)
         with:
           subject-path: dist/detoxrs-*.tar.gz,dist/detoxrs-*.zip
 
